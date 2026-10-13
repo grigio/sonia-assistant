@@ -10,6 +10,10 @@ language you speak (English/Italian tested).
   <img src="./sonia.png" alt="Sonia web UI: live transcript, timer/watch banner and settings drawer" width="700">
 </p>
 
+<p align="center">
+  ▶️ <a href="https://www.youtube.com/watch?v=1WmvMO-f-24"><b>Sonia demo video</b></a>
+</p>
+
 Everything is local. The only external piece is an **OpenAI-compatible endpoint** (an
 already-running `llama-server` — which can also be local, but is managed outside this
 project like a runtime dependency). Experimentally and optionally, an existing `pi`
