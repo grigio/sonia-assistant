@@ -1,0 +1,1682 @@
+<!doctype html>
+<html lang="__LOCALE__" translate="no">
+<head>
+<meta charset="utf-8">
+<meta name="google" content="notranslate">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-i18n="app.title">Assistente full-duplex</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --line: #262a33; --text: #e6e8ee; --dim: #8a90a0;
+    --user: #2b5cff; --bot: #222733; --accent: #7cf29c; --warn: #ffcf5c; --think: #b48cff;
+    /* the only localized text in CSS: JS overwrites it from the catalogue */
+    --cut: "interrotto";
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { display: flex; flex-direction: column; }
+
+  /* ── header: state orb + model ── */
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+    border-bottom: 1px solid var(--line); background: var(--panel); }
+  /* the «assistente vocale» spot is the *assistant's* circle: JS writes --lvl from the
+     TTS output, so it swells and glows with its voice, and only with its voice.
+     Your own speech never touches it — that is what the circle at the input is for:
+     `user` below is deliberately identical to `listening` (no colour, no glow, no
+     pulse), so speaking up here changes nothing; only your circle bounces.
+     It is pinned to the title's first line instead of being centred against the whole
+     two-line block (title + state label): flex-start + the half-leading margin keeps its
+     centre exactly on the title's centre, and it can no longer drift down when the state
+     label under the title grows, wraps or changes text. */
+  #orb { width: 14px; height: 14px; border-radius: 50%; background: #444; flex: none;
+    align-self: flex-start;
+    margin-top: calc((1.45em - 14px) / 2);   /* (line-height − Ø) / 2 = half-leading */
+    transform: scale(calc(1 + var(--lvl, 0) * .55));
+    transform-origin: 50% 50%;   /* level scaling grows it in place, never off the line */
+    transition: background .2s, box-shadow .2s; }
+  #orb.listening { background: var(--accent); box-shadow: 0 0 10px 1px #7cf29c55; }
+  /* = listening: while *you* speak the assistant's spot stays exactly as it was */
+  #orb.user { background: var(--accent); box-shadow: 0 0 10px 1px #7cf29c55; }
+  #orb.thinking { background: var(--think); animation: pulse .7s infinite; }   /* assistant-side, not voice-driven */
+  #orb.speaking { background: #ff8c5a;
+    box-shadow: 0 0 calc(14px + var(--lvl, 0) * 14px) calc(4px + var(--lvl, 0) * 6px) #ff8c5aaa; }
+  #orb.confirm { background: var(--warn); animation: pulse 1.2s infinite; }
+  #orb.paused { background: var(--warn); }
+  #orb.offline { background: #555; }
+  @keyframes pulse { 50% { transform: scale(1.2); } }
+  #title { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  /* ctx: barra «token usati / n_ctx» accanto al titolo (nascosta se n_ctx è ignoto) */
+  #ctxBox { display: inline-flex; align-items: center; gap: 7px; padding: 2px 8px 2px 9px;
+            border: 1px solid var(--line); border-radius: 999px; background: #1d212a; }
+  #ctxBox[hidden] { display: none; }
+  #ctxBar { width: 92px; height: 8px; flex: none; border-radius: 999px;
+            background: #0c0e12; box-shadow: inset 0 0 0 1px #39404f; overflow: hidden; }
+  #ctxFill { display: block; height: 100%; width: 0; border-radius: inherit;
+             background: var(--accent); transition: width .35s ease, background .35s; }
+  #ctxFill.warn { background: var(--warn); }
+  #ctxFill.hot { background: #ff6b6b; }
+  #ctxLabel { font-size: 11px; font-weight: 500; color: var(--dim); white-space: nowrap; }
+  /* «1k / 200k»: la barra da sola non dice cosa sia, quindi la parola c'è */
+  #ctxText { font-size: 11px; font-weight: 600; color: var(--text); white-space: nowrap;
+             font-variant-numeric: tabular-nums; }
+  /* la barra per prima (a sinistra), poi «2%», poi i numeri assoluti */
+  #ctxPct { font-size: 11px; font-weight: 600; color: var(--dim); white-space: nowrap;
+            font-variant-numeric: tabular-nums; min-width: 30px; text-align: right; }
+  #modeBadge { display: none; font-size: 11px; font-weight: 500; color: var(--accent);
+    border: 1px solid #7cf29c55; border-radius: 999px; padding: 1px 8px; }
+  #modeBadge.on { display: inline-block; }
+  #stateLabel { color: var(--dim); font-size: 13px; }
+  #modelBox { margin-left: auto; display: flex; align-items: center; gap: 10px; min-width: 0; }
+  #modelRefresh { padding: 5px 9px; border-radius: 8px; font-size: 14px; line-height: 1;
+    color: var(--dim); background: transparent; }
+  #modelRefresh:hover { color: var(--think); border-color: var(--think); }
+  #modelRefresh:disabled { opacity: .7; cursor: wait; }
+  #textIn:disabled, #sendBtn:disabled { opacity: .45; cursor: not-allowed; }
+  #modelRefresh.spin .glyph { animation: spin .9s linear infinite; }
+  /* the assistant's voice mute: its own button, left of ↻ — the mic button stays independent */
+  #voiceBtn { padding: 5px 9px; border-radius: 8px; font-size: 14px; line-height: 1; }
+  #voiceBtn:hover { color: var(--accent); border-color: var(--accent); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  /* su schermi stretti sparisce solo la parola «ctx»: i numeri assoluti
+     («1k / 200k») restano, perché sono il motivo per cui la barra esiste */
+  @media (max-width: 899px) { #ctxLabel { display: none; } }
+  #modelSel { max-width: 260px; padding: 6px 8px; font-size: 13px; }
+  #modelSel.filtering { border-color: var(--think); }   /* a query typed into it is active */
+  /* narrow screens: the whole model row (🔊 ↻ modello ⚙, the right-hand panel) drops on
+     a line of its own and the selector shrinks, instead of dragging the header past the
+     right edge of the viewport */
+  @media (max-width: 699px) {
+    header { flex-wrap: wrap; row-gap: 8px; }
+    #modelBox { flex: 1 0 100%; }
+    #modelSel { max-width: none; flex: 1; min-width: 0; }
+  }
+
+  /* ── chat ── */
+  main { flex: 1; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 10px; }
+  /* the chat's scrollbar: transparent track (the chat's own background shows through),
+     only a slim thumb. The standard pair covers Chromium 121+ / Firefox; the ::-webkit
+     block is the fallback for older engines that ignore scrollbar-color/width. */
+  main { scrollbar-width: thin; scrollbar-color: #3a4152 transparent; }
+  main::-webkit-scrollbar { width: 10px; }
+  main::-webkit-scrollbar-track, main::-webkit-scrollbar-corner { background: transparent; }
+  main::-webkit-scrollbar-thumb { background: #3a4152; border-radius: 999px;
+    border: 2.5px solid transparent; background-clip: padding-box; }
+  main::-webkit-scrollbar-thumb:hover { background: #4b5266; background-clip: padding-box; }
+  .msg { max-width: 78%; padding: 9px 13px; border-radius: 14px; white-space: pre-wrap;
+         position: relative; }   /* ⟲ hangs from the bubble's top corner */
+  .user { align-self: flex-end; background: var(--user); border-bottom-right-radius: 4px; }
+  .bot { align-self: flex-start; background: var(--bot); border-bottom-left-radius: 4px; }
+  .bot.cut::after { content: "  ✂ " var(--cut); color: var(--warn); font-size: 12px; }
+  .info { font-size: 11px; color: #c9d4ff99; margin-top: 3px; }
+  .bot .info { color: var(--dim); }
+  /* ⟲ rewind the conversation to this line: a round button in the bubble's top corner,
+     there only while the pointer is on the bubble (always a little visible where there is
+     no hover at all). One per line the server gave a checkpoint id to. */
+  .msg .rew { position: absolute; top: -10px; width: 22px; height: 22px; padding: 0;
+    border-radius: 50%; background: #1b1f29; opacity: 0; transition: opacity .12s;
+    display: inline-flex; align-items: center; justify-content: center; }
+  /* the ⟲ glyph is the character itself, not an SVG: the round button centres it */
+  .msg .rew .glyph { width: auto; height: auto; font-size: 15px; line-height: 1; }
+  .msg:hover .rew, .msg .rew:focus-visible { opacity: 1; }
+  .msg .rew:hover { color: var(--warn); border-color: var(--warn); }
+  .msg .rew:disabled { opacity: .4; cursor: wait; }
+  .user .rew { right: 8px; }
+  .bot .rew { left: 8px; }
+  @media (hover: none) { .msg .rew { opacity: .6; } }
+  .event { align-self: center; color: var(--dim); font-size: 12px; text-align: center; }
+  #partial { min-height: 26px; padding: 4px 18px; color: #9db8ff; font-style: italic;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* ── the banner above the chat: a chip per pending timer / running command, each with
+     its own ✕. It is a flex row that wraps, so ten chips never push the chat sideways. */
+  #taskBar { flex: none; display: flex; flex-wrap: wrap; gap: 7px; align-items: center;
+    padding: 8px 14px; background: #141821; border-bottom: 1px solid var(--line); }
+  #taskBar[hidden] { display: none; }
+  .taskChip { display: inline-flex; align-items: center; gap: 8px; max-width: 100%;
+    min-width: 0; padding: 4px 5px 4px 11px; border: 1px solid #3a4152;
+    border-radius: 999px; background: #1b2130; font-size: 12.5px; }
+  .taskChip .ico { flex: none; }
+  .taskChip .lbl { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; max-width: 46ch; }
+  /* the countdown: tabular figures so a second ticking by never nudges the ✕ next to it */
+  .taskChip .left { flex: none; color: var(--warn); font-weight: 600; font-size: 12px;
+    font-variant-numeric: tabular-nums; }
+  .taskChip .x { flex: none; display: inline-flex; align-items: center; padding: 3px 6px;
+    border-radius: 999px; color: var(--dim); background: transparent; }
+  .taskChip .x .glyph { width: 13px; height: 13px; }
+  .taskChip .x:hover { color: #ff8f8f; border-color: #7a2f2f; }
+  .taskChip .x:disabled { opacity: .5; cursor: wait; }
+
+  /* ── command cards ── */
+  .cmd { align-self: flex-start; max-width: 88%; background: #1b1f29;
+    border: 1px solid #343b4d; border-radius: 12px; padding: 9px 12px; font-size: 13px; }
+  .cmd.pending { border-color: var(--warn); }
+  .cmd code { display: block; font: 13px/1.4 ui-monospace, "JetBrains Mono", monospace;
+    color: #ffd98a; white-space: pre-wrap; word-break: break-all; margin: 4px 0; }
+  .cmd .why, .cmd .status { color: var(--dim); font-size: 12px; margin-top: 4px; }
+  .cmd .btns { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  .cmd .btns button { padding: 5px 12px; display: inline-flex; align-items: center; gap: 7px; }
+  .cmd .ok { border-color: #2f7a46; } .cmd .no { border-color: #7a2f2f; }
+  .cmd details { margin-top: 6px; }
+  .cmd details pre { max-height: 260px; overflow: auto; background: #0b0d11; padding: 8px;
+    border-radius: 8px; font: 12px/1.35 ui-monospace, monospace; white-space: pre-wrap;
+    margin: 6px 0 0; }
+
+  /* ── tool-call cards: one header line, the details collapsed ── */
+  .tool { align-self: flex-start; max-width: 88%; background: #141821;
+    border: 1px solid #2a3140; border-radius: 12px; padding: 7px 11px; font-size: 13px; }
+  .tool .head { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .tool .name { font-weight: 600; color: #9fd3ff; flex: none; }
+  .tool .sum { color: var(--dim); font: 12px/1.4 ui-monospace, "JetBrains Mono", monospace;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+  .tool .badge { margin-left: auto; font-size: 11px; color: var(--dim); white-space: nowrap;
+    flex: none; }
+  .tool.done .badge { color: var(--accent); }
+  .tool.err { border-color: #7a2f2f; }
+  .tool.err .badge { color: #ff8f8f; }
+  .tool.blocked { border-color: #7a5f2f; }
+  .tool.blocked .badge { color: #ffc88f; }
+  .tool details { margin-top: 6px; }
+  .tool summary { cursor: pointer; color: var(--dim); font-size: 12px; user-select: none; }
+  .tool summary:hover { color: var(--text); }
+  .tool .lbl { color: var(--dim); font-size: 10px; text-transform: uppercase;
+    letter-spacing: .06em; margin-top: 7px; }
+  .tool pre { background: #0b0d11; padding: 7px 9px; border-radius: 8px; margin: 3px 0 0;
+    font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; word-break: break-word;
+    max-height: 220px; overflow: auto; }
+  .tool .meta { color: var(--dim); font-size: 11px; margin-top: 5px; }
+
+  /* ── 💭 reasoning: its own block, collapsed by default, one per turn ── */
+  .think { align-self: flex-start; max-width: 78%; background: #141821;
+    border: 1px solid #2a3140; border-radius: 12px; padding: 6px 10px; }
+  .think summary { display: flex; align-items: baseline; gap: 7px; cursor: pointer;
+    color: var(--think); font-size: 12px; user-select: none; list-style: none; }
+  .think summary::-webkit-details-marker { display: none; }
+  .think summary::before { content: "▸"; color: var(--dim); }
+  .think[open] summary::before { content: "▾"; }
+  .think summary .ico { flex: none; }
+  .think summary .cnt { color: var(--dim); flex: none; }
+  .think.busy summary .cnt { animation: thinkBlink .9s infinite; }
+  @keyframes thinkBlink { 50% { opacity: .35; } }
+  .think summary .peek { color: var(--dim); font-style: italic; flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .think .body { margin-top: 6px; background: #0b0d11; border-left: 2px solid #7c5cff66;
+    border-radius: 6px; padding: 7px 9px; max-height: 260px; overflow: auto;
+    font: 12px/1.45 ui-monospace, "JetBrains Mono", monospace;
+    white-space: pre-wrap; word-break: break-word; color: #aab2c8; }
+
+  /* ── settings drawer: it drops from the header, right under the ⚙ button ── */
+  #settings { display: none; background: var(--panel); border-bottom: 1px solid var(--line);
+    padding: 13px 16px 16px; gap: 13px; flex-direction: column; overflow-y: auto;
+    max-height: min(66vh, 560px); }
+  #settings.open { display: flex; animation: drawerIn .16s ease-out; }
+  @keyframes drawerIn { from { opacity: 0; transform: translateY(-8px); } }
+  @media (prefers-reduced-motion: reduce) { #settings.open { animation: none; } }
+  #settings .setHead { display: flex; align-items: center; gap: 10px;
+    padding-bottom: 11px; border-bottom: 1px solid var(--line); }
+  /* the cards live in a grid of their own: with only auto-fit tracks here, the header's
+     `1 / -1` span would keep an unused column from collapsing (a hole on the right) */
+  #settings .cards { display: grid; gap: 13px;
+    grid-template-columns: repeat(auto-fit, minmax(min(230px, 100%), 1fr)); }
+  #settings .ttl { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; }
+  #settings .ttl .glyph { width: 16px; height: 16px; color: var(--think); }
+  /* the ✕ always sits on the far right (with the hint just to its left when there is one) */
+  #settings .hint { color: var(--dim); font-size: 11.5px; text-align: right; }
+  #settings .setHead > button { margin-left: auto; }
+
+  /* one card per topic: title on top, a row per control (switch right, selector full width) */
+  #settings .grp { background: #1b1f29; border: 1px solid var(--line); border-radius: 12px;
+    padding: 11px 13px 12px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+  #settings .grpTtl { display: flex; align-items: center; gap: 7px; font-size: 11px;
+    font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); }
+  #settings .grpTtl .glyph { width: 14px; height: 14px; color: var(--think); }
+  #settings .row { display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; color: var(--text); font-size: 13px; cursor: pointer; min-width: 0; }
+  #settings .row.col { flex-direction: column; align-items: stretch; gap: 6px; cursor: default; }
+  #settings .row .txt { min-width: 0; }
+  #settings .row small { display: block; color: var(--dim); font-size: 11px; line-height: 1.4;
+    margin-top: 2px; }
+  #settings select { padding: 6px 9px; font-size: 13px; width: 100%; min-width: 0; }
+
+  /* the checkbox is still the checkbox — only its skin is a switch, so every handler,
+     test and `checked` read keeps working unchanged */
+  #settings input.sw { appearance: none; -webkit-appearance: none; margin: 0; flex: none;
+    position: relative; width: 38px; height: 21px; border-radius: 999px; cursor: pointer;
+    background: #262b38; border: 1px solid var(--line);
+    transition: background .16s, border-color .16s; }
+  #settings input.sw::after { content: ""; position: absolute; top: 2px; left: 2px;
+    width: 15px; height: 15px; border-radius: 50%; background: var(--dim);
+    transition: transform .16s, background .16s; }
+  #settings input.sw:checked { background: #1e3d2b; border-color: var(--accent); }
+  #settings input.sw:checked::after { transform: translateX(17px); background: var(--accent); }
+  #settings input.sw:focus-visible { outline: 2px solid var(--think); outline-offset: 2px; }
+  @media (max-width: 699px) { #settings .hint { display: none; } }
+
+  /* ── skills: the checkbox list of SKILLS_DIR (only the ticked ones reach the model) ── */
+  #skillsBox { background: #1b1f29; border: 1px solid var(--line);
+    border-radius: 12px; padding: 11px 13px 12px; }
+  #skillsBox .hd { font-size: 11px; font-weight: 600; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--dim); display: flex; gap: 8px;
+    align-items: center; min-width: 0; }
+  #skillsBox .hd .glyph { width: 14px; height: 14px; color: var(--think); }
+  #skillsBox .hd span { color: var(--dim); font: 11px ui-monospace, "JetBrains Mono", monospace;
+    text-transform: none; letter-spacing: 0; font-weight: 400; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #skillList { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  #skillList label { color: var(--text); font-size: 12.5px; display: inline-flex;
+    align-items: center; gap: 7px; cursor: pointer; padding: 4px 11px 4px 9px;
+    border: 1px solid var(--line); border-radius: 999px; background: #151923;
+    transition: border-color .12s, background .12s, color .12s; }
+  #skillList label:hover { border-color: #3a4152; }
+  #skillList label.off { color: var(--dim); background: transparent; }
+  #skillList input { margin: 0; accent-color: var(--accent); cursor: pointer; }
+  #skillList .empty { color: var(--dim); font-size: 12px; font-style: italic; }
+
+  /* ── footer ── */
+  /* grid, one row, document order = column order: pulsing circle · text field ·
+     the 4 icon buttons (send, mic, stop, reset) */
+  footer { display: grid; grid-template-columns: auto minmax(0, 1fr) repeat(4, max-content);
+    gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line);
+    background: var(--panel); align-items: center; }
+  /* the pulsing circle left of the input: JS writes --lvl on every animation frame
+     from the mic peak — it is the *user's* voice, so it stays blue. The assistant's
+     own level drives the header orb instead (see the top of this stylesheet). */
+  #talkDot { --lvl: 0; width: 13px; height: 13px; border-radius: 50%; flex: none;
+    justify-self: center; color: #4f8cff; background: currentColor;
+    opacity: calc(.4 + var(--lvl) * .6);
+    transform: scale(calc(1 + var(--lvl) * .9));
+    box-shadow: 0 0 calc(var(--lvl) * 16px) calc(var(--lvl) * 5px) currentColor; }
+  #textIn { width: 100%; background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; font: inherit; }
+  button, select { background: #232835; color: var(--text); border: 1px solid var(--line);
+    border-radius: 10px; padding: 8px 12px; font: inherit; cursor: pointer; }
+  button:hover { border-color: #3a4152; }
+  button.off { color: var(--warn); border-color: var(--warn); }
+  /* monochrome icon buttons: one inline SVG per icon, stroked with currentColor, so a
+     button's state (hover / .off / aria-expanded) colours the glyph too. No emoji. */
+  .glyph { width: 17px; height: 17px; display: block; flex: none;
+    fill: none; stroke: currentColor; stroke-width: 1.7;
+    stroke-linecap: round; stroke-linejoin: round; }
+  button.iconBtn { padding: 7px; display: inline-flex; align-items: center;
+    justify-content: center; }
+  /* a toggling button carries both states: `.off` (muted) shows the second one */
+  .iconBtn .i-off { display: none; }
+  .iconBtn.off .i-on { display: none; }
+  .iconBtn.off .i-off { display: block; }
+  #settingsBtn[aria-expanded="true"] { border-color: var(--think); color: var(--think); }
+
+  #overlay { position: fixed; inset: 0; background: #0f1115ee; display: none;
+    align-items: center; justify-content: center; flex-direction: column; gap: 14px; }
+  #overlay button { font-size: 18px; padding: 14px 26px; display: inline-flex;
+    align-items: center; gap: 10px; }
+  #overlay .glyph { width: 20px; height: 20px; }
+</style>
+</head>
+<body>
+<header>
+  <div id="orb" class="offline"></div>
+  <div>
+    <div id="title"><span data-i18n="ui.title">Assistente vocale</span> <span id="modeBadge">pi CLI</span><span id="ctxBox"
+      data-i18n-title="ctx.title.short" title="ctx: token usati su n_ctx"><span id="ctxLabel">ctx</span
+      ><span id="ctxBar"><span id="ctxFill"></span></span
+      ><span id="ctxPct"></span><span id="ctxText"></span></span></div>
+    <div id="stateLabel" data-i18n="state.connecting">connessione…</div>
+  </div>
+  <div id="modelBox">
+    <button id="voiceBtn" type="button" class="iconBtn"
+            data-i18n-title="hdr.voice.title" data-i18n-aria="hdr.voice.aria"
+            title="Voce dell'assistente on/off — spegne solo la riproduzione, il microfono resta attivo"
+            aria-label="Voce dell'assistente on/off" aria-pressed="true">
+      <svg class="glyph i-on" viewBox="0 0 24 24" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+      <svg class="glyph i-off" viewBox="0 0 24 24" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
+    </button>
+    <button id="modelRefresh" type="button" class="iconBtn"
+            data-i18n-title="hdr.refresh.title" data-i18n-aria="hdr.refresh.aria"
+            title="Aggiorna l'elenco dei modelli (pi --list-models)"
+            aria-label="Aggiorna elenco modelli">
+      <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+    </button>
+    <select id="modelSel" data-i18n-title="model.api.title" data-i18n-aria="model.aria"
+            title="Modello LLM (llama-server)"
+            aria-label="Modello LLM — scrivi una parte del nome per filtrare l'elenco"><option>…</option></select>
+    <!-- ⚙ lives in the top-right panel, at the far right of the header: it toggles the
+         drawer that drops right below it -->
+    <button id="settingsBtn" class="iconBtn" data-i18n-title="set.title" data-i18n-aria="set.title"
+      title="Impostazioni" aria-label="Impostazioni" aria-expanded="false" aria-controls="settings">
+      <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    </button>
+  </div>
+</header>
+
+<section id="settings" data-i18n-aria="set.title" aria-label="Impostazioni">
+  <div class="setHead">
+    <span class="ttl"><svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg><span data-i18n="set.title">Impostazioni</span></span>
+    <span class="hint" data-i18n="set.hint">ogni scelta è subito attiva, niente da salvare · Esc per chiudere</span>
+    <button id="settingsClose" class="iconBtn" type="button" data-i18n-title="set.close" data-i18n-aria="set.close"
+      title="Chiudi le impostazioni" aria-label="Chiudi le impostazioni">
+      <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+
+  <div class="cards">
+  <div class="grp" role="group" data-i18n-aria="set.grp.listen" aria-label="Ascolto">
+    <div class="grpTtl"><svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg><span data-i18n="set.grp.listen">ascolto</span></div>
+    <label class="row" data-i18n-title="set.barge.title" title="Se parli sopra l'assistente, questo si ferma e torna ad ascoltare">
+      <span class="txt">barge-in<small data-i18n="set.barge.sub">mi fermi se parli sopra di me</small></span>
+      <input type="checkbox" id="bargeChk" class="sw" checked>
+    </label>
+    <label class="row" data-i18n-title="set.half.title" title="Mentre l'assistente parla il microfono viene ignorato (serve solo senza AEC)">
+      <span class="txt">half-duplex<small data-i18n="set.half.sub">ignora il microfono mentre parlo (niente AEC)</small></span>
+      <input type="checkbox" id="halfChk" class="sw">
+    </label>
+    <label class="row" data-i18n-title="set.aec.title" title="Manda l'audio in riproduzione all'ecocancellatore del browser, così il microfono non raccoglie la voce dell'assistente">
+      <span class="txt">AEC loopback<small data-i18n="set.aec.sub">rimanda l'audio in play all'ecocancellatore</small></span>
+      <input type="checkbox" id="aecChk" class="sw" checked>
+    </label>
+  </div>
+
+  <div class="grp" role="group" data-i18n-aria="set.grp.voice" aria-label="Voce">
+    <div class="grpTtl"><svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg><span data-i18n="set.grp.voice">voce</span></div>
+    <label class="row col" data-i18n-title="set.voice.title" title="La voce del sintetizzatore: ogni voce è un preset del pacchetto TTS
+                caricato sul server audio (in futuro anche altri pacchetti/lingue)">
+      <span class="txt"><span data-i18n="set.voice">sintetizzatore</span><small id="voiceMeta">TTS · 24000 Hz</small></span>
+      <select id="voiceSel" data-i18n-aria="set.voice.aria" aria-label="Voce dell'assistente (TTS)"></select>
+    </label>
+  </div>
+
+  <div class="grp" role="group" data-i18n-aria="set.grp.reply" aria-label="Risposta">
+    <div class="grpTtl"><svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><span data-i18n="set.grp.reply">risposta</span></div>
+    <label class="row" data-i18n-title="set.think.title" title="Il modello ragiona prima di rispondere: il ragionamento appare nel
+                chat come blocco collassato, non viene mai detto ad alta voce">
+      <span class="txt"><span data-i18n="think.label">ragionamento</span><small data-i18n="set.think.sub">penso prima di rispondere · 💭 resta collassato sotto la risposta</small></span>
+      <input type="checkbox" id="thinkChk" class="sw">
+    </label>
+    <label class="row" data-i18n-title="set.pi.title" title="Risponde il CLI pi (pi -c &quot;…&quot;), con i suoi strumenti e la sua memoria,
+                invece dell'API OpenAI-compatibile di llama-server">
+      <span class="txt">pi CLI<small data-i18n="set.pi.sub">strumenti, skill e memoria di pi · il modello si sceglie nella tendina in alto e si filtra scrivendoci dentro</small></span>
+      <input type="checkbox" id="piChk" class="sw">
+    </label>
+  </div>
+
+  <div class="grp" role="group" data-i18n-aria="set.grp.cmd" aria-label="Comandi">
+    <div class="grpTtl"><svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg><span data-i18n="set.grp.cmd">comandi</span></div>
+    <label class="row col" data-i18n-title="set.cmd.title" title="Esecuzione comandi Linux locali">
+      <span class="txt">bash<small data-i18n="set.cmd.sub">quando posso eseguire comandi</small></span>
+      <select id="cmdSel" data-i18n-title="set.cmd.title" title="Esecuzione comandi Linux locali">
+        <option value="ask" data-i18n="opt.ask">chiedi</option><option value="auto" data-i18n="opt.auto">auto</option><option value="off" data-i18n="opt.off">off</option>
+      </select>
+    </label>
+    <label class="row col" data-i18n-title="set.turn.title" title="Quanto chiedo all'LLM se hai finito di parlare, quando il silenzio da solo non basta">
+      <span class="txt"><span data-i18n="set.turn">fine turno</span><small data-i18n="set.turn.sub">quanto chiedo all'LLM se hai finito</small></span>
+      <select id="decisionSel">
+        <option value="auto" data-i18n="opt.auto">auto</option><option value="always" data-i18n="opt.always">sempre</option><option value="off" data-i18n="opt.off">off</option>
+      </select>
+    </label>
+  </div>
+  </div>
+
+  <div id="skillsBox" data-i18n-title="skills.title" title="Skill: pacchetti di istruzioni e script nella cartella delle skill.
+      Solo quelle spuntate entrano nel contesto dell'assistente (li decidi tu, non lui).">
+    <div class="hd"><svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>skills <span id="skillsDir"></span></div>
+    <div id="skillList"></div>
+  </div>
+</section>
+
+<!-- the banner above the chat: one chip per pending timer / running command, each with
+     its own ✕ (the server answers with a fresh `tasks` event, whole) -->
+<div id="taskBar" hidden></div>
+<main id="log"></main>
+<div id="partial"></div>
+
+<footer>
+  <div id="talkDot" aria-hidden="true"></div>
+  <input id="textIn" data-i18n-ph="ft.input.ph" placeholder="Parla, oppure scrivi qui e premi Invio…" autocomplete="off">
+  <button id="sendBtn" class="iconBtn" data-i18n-title="ft.send.title" data-i18n-aria="ft.send.aria" title="Invia il messaggio" aria-label="Invia il messaggio">
+    <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+  </button>
+  <button id="micBtn" class="iconBtn" data-i18n-title="ft.mic.title" data-i18n-aria="ft.mic.aria"
+    title="Microfono on/off — ferma solo l'ascolto, la voce dell'assistente continua (usala in alto a destra)" aria-label="Microfono on/off">
+    <svg class="glyph i-on" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+    <svg class="glyph i-off" viewBox="0 0 24 24" aria-hidden="true"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+  </button>
+  <button id="stopBtn" class="iconBtn" data-i18n-title="ft.stop.title" data-i18n-aria="ft.stop.aria" title="Ferma l'ascolto e la risposta" aria-label="Ferma">
+    <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/></svg>
+  </button>
+  <button id="resetBtn" class="iconBtn" data-i18n-title="ft.reset.title" data-i18n-aria="ft.reset.aria" title="Cancella la chat e la memoria della conversazione" aria-label="Cancella la chat">
+    <svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+  </button>
+</footer>
+
+<div id="overlay"><div data-i18n="overlay.text">Serve un clic per attivare audio e microfono.</div>
+  <button id="startBtn"><svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"/></svg><span data-i18n="overlay.start">Avvia</span></button></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+// ── localization ────────────────────────────────────────────────────────────────
+// LOCALE in .env is stamped into this page by the server (`__LOCALE__`), both here and
+// in <html lang>: pick `it` or `en` and the whole UI follows. Every visible string lives
+// in UI_STRINGS — the static markup is filled from it by applyLocale() (that is what the
+// data-i18n* attributes are), the running code asks t() / tf(). `it` is the source
+// catalogue and `en` is typed against it, so a key can never exist in one and not the
+// other; a string written straight into the code instead of here is a bug.
+// The server keeps its own table (src/i18n.ts) for the lines that arrive over the
+// WebSocket — this page runs before the socket exists, so it cannot fetch those.
+const UI_STRINGS = {
+  it: {
+    "app.title": "Assistente full-duplex",
+    "ui.title": "Assistente vocale",
+    "state.connecting": "connessione…",
+    "state.listening": "in ascolto",
+    "state.user": "stai parlando…",
+    "state.thinking": "sto pensando…",
+    "state.speaking": "sto parlando",
+    "state.confirm": "attendo la tua conferma (sì / no)",
+    "state.paused": "in pausa (mi hai interrotto?)",
+    "state.offline": "offline",
+
+    "ctx.title.short": "ctx: token usati su n_ctx",
+    "ctx.title": "ctx: {used} token usati su {total} ({pct}%)",
+    "hdr.voice.title": "Voce dell'assistente on/off — spegne solo la riproduzione, il microfono resta attivo",
+    "hdr.voice.aria": "Voce dell'assistente on/off",
+    "hdr.refresh.title": "Aggiorna l'elenco dei modelli (pi --list-models)",
+    "hdr.refresh.aria": "Aggiorna elenco modelli",
+    "model.api.title": "Modello LLM (llama-server)",
+    "model.pi.title": "Modello di pi — elenco da `pi --list-models` (PI_MODEL)",
+    "model.aria": "Modello LLM — scrivi una parte del nome per filtrare l'elenco",
+    "model.filter.head": "🔍 «{q}» · {n} di {total}",
+    "model.filter.title": " — filtro «{q}»: {n} di {total} modelli (Backspace corregge, Esc azzera)",
+    "model.list.title": " — {n} modelli, scrivi una parte del nome per filtrare",
+
+    "set.title": "Impostazioni",
+    "set.hint": "ogni scelta è subito attiva, niente da salvare · Esc per chiudere",
+    "set.close": "Chiudi le impostazioni",
+    "set.grp.listen": "ascolto",
+    "set.barge.title": "Se parli sopra l'assistente, questo si ferma e torna ad ascoltare",
+    "set.barge.sub": "mi fermi se parli sopra di me",
+    "set.half.title": "Mentre l'assistente parla il microfono viene ignorato (serve solo senza AEC)",
+    "set.half.sub": "ignora il microfono mentre parlo (niente AEC)",
+    "set.aec.title": "Manda l'audio in riproduzione all'ecocancellatore del browser, così il microfono non raccoglie la voce dell'assistente",
+    "set.aec.sub": "rimanda l'audio in play all'ecocancellatore",
+    "set.grp.voice": "voce",
+    "set.voice.title": "La voce del sintetizzatore: ogni voce è un preset del pacchetto TTS caricato sul server audio (in futuro anche altri pacchetti/lingue)",
+    "set.voice": "sintetizzatore",
+    "set.voice.aria": "Voce dell'assistente (TTS)",
+    "voice.meta": "TTS · {hz} Hz · {n} voci",
+    "set.grp.reply": "risposta",
+    "think.label": "ragionamento",
+    "set.think.title": "Il modello ragiona prima di rispondere: il ragionamento appare nel chat come blocco collassato, non viene mai detto ad alta voce",
+    "set.think.sub": "penso prima di rispondere · 💭 resta collassato sotto la risposta",
+    "set.pi.title": "Risponde il CLI pi (pi -c \"…\"), con i suoi strumenti e la sua memoria, invece dell'API OpenAI-compatibile di llama-server",
+    "set.pi.sub": "strumenti, skill e memoria di pi · il modello si sceglie nella tendina in alto e si filtra scrivendoci dentro",
+    "set.grp.cmd": "comandi",
+    "set.cmd.title": "Esecuzione comandi Linux locali",
+    "set.cmd.sub": "quando posso eseguire comandi",
+    "set.turn.title": "Quanto chiedo all'LLM se hai finito di parlare, quando il silenzio da solo non basta",
+    "set.turn": "fine turno",
+    "set.turn.sub": "quanto chiedo all'LLM se hai finito",
+    "opt.ask": "chiedi",
+    "opt.auto": "auto",
+    "opt.off": "off",
+    "opt.always": "sempre",
+    "skills.title": "Skill: pacchetti di istruzioni e script nella cartella delle skill. Solo quelle spuntate entrano nel contesto dell'assistente (li decidi tu, non lui).",
+    "skills.empty.in": "nessuna skill in {dir}",
+    "skills.empty": "nessuna skill trovata",
+
+    "ft.input.ph": "Parla, oppure scrivi qui e premi Invio…",
+    "ft.send.title": "Invia il messaggio",
+    "ft.send.aria": "Invia il messaggio",
+    "ft.mic.title": "Microfono on/off — ferma solo l'ascolto, la voce dell'assistente continua (usala in alto a destra)",
+    "ft.mic.aria": "Microfono on/off",
+    "ft.stop.title": "Ferma l'ascolto e la risposta",
+    "ft.stop.aria": "Ferma",
+    "ft.reset.title": "Cancella la chat e la memoria della conversazione",
+    "ft.reset.aria": "Cancella la chat",
+    "overlay.text": "Serve un clic per attivare audio e microfono.",
+    "overlay.start": "Avvia",
+
+    "msg.cut": "interrotto",
+    "msg.newChat": "Nuova conversazione.",
+    "msg.replaced": "Un'altra finestra ha preso il controllo: ricarica la pagina per riprenderlo.",
+    "msg.ready": "Pronto. Parla pure — puoi interrompermi quando vuoi.",
+    "msg.rew.title": "Riavvolgi la conversazione fin qui — cancella tutto ciò che viene dopo",
+    "msg.rew.aria": "Riavvolgi la conversazione fin qui",
+    "msg.rew.done": "⟲ conversazione riavvolta: {n} messaggi cancellati",
+    "msg.rew.lost": "⟲ checkpoint non trovato: nessuna modifica (ricarica la pagina se la chat è sfasata)",
+    "think.chars": "· {n} car",
+    "cmd.head": "💻 comando",
+    "cmd.wants": "💻 vuole eseguire questo comando:",
+    "cmd.run": "💻 eseguo:",
+    "cmd.runAuto": "💻 eseguo (sola lettura):",
+    "cmd.running": "⏳ in esecuzione…",
+    "cmd.denied": "❌ non eseguito",
+    "cmd.yes": "Esegui",
+    "cmd.no": "Annulla",
+    "cmd.voiceHint": "oppure rispondi a voce «sì» / «no»",
+    "cmd.output": "output ({n} righe)",
+    "cmd.stopped": "⏹ annullato",
+    "tasks.cancel": "Annulla",
+    "tasks.cancelAria": "Annulla «{label}»",
+    /* tool-card states stay ENGLISH in every locale: they are internal states, the
+       same machine-ish words the log uses, not text to translate */
+    "tool.running": "⏳ running",
+    "tool.error": "⚠ error",
+    "tool.blocked": "⛔ blocked",
+    "tool.details": "dettagli",
+    "tool.noOutput": "(nessun output)",
+    "ev.latency": "⏱ primo token {a} ms · primo audio {b} ms",
+    "ev.models": "↻ elenco modelli aggiornato: {n} voci",
+    "ev.loading": "⏳ carico il modello {m}…",
+    "ev.ready": "✅ modello {m} pronto ({s} s)",
+    "ev.modelError": "⚠ impossibile caricare {m}: {e}",
+    "audio.direct": "{reason} → uscita audio diretta",
+    "audio.loopOn": "🔈 AEC loopback attivo",
+    "audio.noNet": "rete assente",
+    "audio.offline": "rete assente, AEC loopback non disponibile",
+    "audio.loopFail": "AEC loopback non connesso (rete?)",
+    "audio.loopLost": "connessione AEC loopback persa (rete cambiata?)",
+    "audio.loopNone": "AEC loopback non disponibile",
+  },
+  en: {
+    "app.title": "Full-duplex assistant",
+    "ui.title": "Voice assistant",
+    "state.connecting": "connecting…",
+    "state.listening": "listening",
+    "state.user": "you're talking…",
+    "state.thinking": "thinking…",
+    "state.speaking": "speaking",
+    "state.confirm": "waiting for your confirmation (yes / no)",
+    "state.paused": "paused (did you interrupt me?)",
+    "state.offline": "offline",
+
+    "ctx.title.short": "ctx: tokens used of n_ctx",
+    "ctx.title": "ctx: {used} of {total} tokens ({pct}%)",
+    "hdr.voice.title": "Assistant's voice on/off — mutes the playback only, the microphone stays on",
+    "hdr.voice.aria": "Assistant's voice on/off",
+    "hdr.refresh.title": "Refresh the model list (pi --list-models)",
+    "hdr.refresh.aria": "Refresh model list",
+    "model.api.title": "LLM model (llama-server)",
+    "model.pi.title": "pi model — list from `pi --list-models` (PI_MODEL)",
+    "model.aria": "LLM model — type part of the name to filter the list",
+    "model.filter.head": "🔍 «{q}» · {n} of {total}",
+    "model.filter.title": " — filter «{q}»: {n} of {total} models (Backspace edits, Esc clears)",
+    "model.list.title": " — {n} models, type part of a name to filter",
+
+    "set.title": "Settings",
+    "set.hint": "every choice applies immediately, nothing to save · Esc closes",
+    "set.close": "Close settings",
+    "set.grp.listen": "listening",
+    "set.barge.title": "If you talk over the assistant, it stops and goes back to listening",
+    "set.barge.sub": "you stop when I talk over you",
+    "set.half.title": "While the assistant speaks the microphone is ignored (only needed without AEC)",
+    "set.half.sub": "ignore the microphone while I speak (no AEC)",
+    "set.aec.title": "Sends the playback audio to the browser's echo canceller, so the microphone never picks up the assistant's voice",
+    "set.aec.sub": "routes the playing audio back to the canceller",
+    "set.grp.voice": "voice",
+    "set.voice.title": "The synthesiser's voice: every voice is a preset of the TTS pack loaded on the audio server (other packs/languages later)",
+    "set.voice": "synthesiser",
+    "set.voice.aria": "Assistant's voice (TTS)",
+    "voice.meta": "TTS · {hz} Hz · {n} voices",
+    "set.grp.reply": "reply",
+    "think.label": "reasoning",
+    "set.think.title": "The model reasons before answering: the reasoning shows in the chat as a collapsed block and is never spoken aloud",
+    "set.think.sub": "I think before answering · 💭 stays collapsed under the answer",
+    "set.pi.title": "The pi CLI answers (pi -c \"…\"), with its own tools and memory, instead of llama-server's OpenAI-compatible API",
+    "set.pi.sub": "pi's tools, skills and memory · pick the model in the dropdown above and filter by typing into it",
+    "set.grp.cmd": "commands",
+    "set.cmd.title": "Local Linux command execution",
+    "set.cmd.sub": "when I may run commands",
+    "set.turn.title": "How often I ask the LLM whether you have finished speaking, when silence alone is not enough",
+    "set.turn": "end of turn",
+    "set.turn.sub": "how often I ask the LLM if you are done",
+    "opt.ask": "ask",
+    "opt.auto": "auto",
+    "opt.off": "off",
+    "opt.always": "always",
+    "skills.title": "Skills: instruction and script packages in the skills folder. Only the ticked ones enter the assistant's context (you decide, not it).",
+    "skills.empty.in": "no skills in {dir}",
+    "skills.empty": "no skills found",
+
+    "ft.input.ph": "Speak, or type here and press Enter…",
+    "ft.send.title": "Send the message",
+    "ft.send.aria": "Send the message",
+    "ft.mic.title": "Microphone on/off — stops the listening only, the assistant's voice keeps going (use the one top-right)",
+    "ft.mic.aria": "Microphone on/off",
+    "ft.stop.title": "Stop listening and answering",
+    "ft.stop.aria": "Stop",
+    "ft.reset.title": "Clear the chat and the conversation memory",
+    "ft.reset.aria": "Clear the chat",
+    "overlay.text": "One click is needed to switch on the audio and the microphone.",
+    "overlay.start": "Start",
+
+    "msg.cut": "interrupted",
+    "msg.newChat": "New conversation.",
+    "msg.replaced": "Another window took control — reload the page to take it back.",
+    "msg.ready": "Ready. Just speak — you can interrupt me whenever you like.",
+    "msg.rew.title": "Rewind the conversation to here — drops everything after it",
+    "msg.rew.aria": "Rewind the conversation to here",
+    "msg.rew.done": "⟲ conversation rewound: {n} messages dropped",
+    "msg.rew.lost": "⟲ checkpoint not found: nothing changed (reload the page if the chat is out of step)",
+    "think.chars": "· {n} chars",
+    "cmd.head": "💻 command",
+    "cmd.wants": "💻 wants to run this command:",
+    "cmd.run": "💻 running:",
+    "cmd.runAuto": "💻 running (read-only):",
+    "cmd.running": "⏳ running…",
+    "cmd.denied": "❌ not run",
+    "cmd.yes": "Run",
+    "cmd.no": "Cancel",
+    "cmd.voiceHint": "or answer by voice «yes» / «no»",
+    "cmd.output": "output ({n} lines)",
+    "cmd.stopped": "⏹ cancelled",
+    "tasks.cancel": "Cancel",
+    "tasks.cancelAria": "Cancel «{label}»",
+    "tool.running": "⏳ running",
+    "tool.error": "⚠ error",
+    "tool.blocked": "⛔ blocked",
+    "tool.details": "details",
+    "tool.noOutput": "(no output)",
+    "ev.latency": "⏱ first token {a} ms · first audio {b} ms",
+    "ev.models": "↻ model list refreshed: {n} entries",
+    "ev.loading": "⏳ loading model {m}…",
+    "ev.ready": "✅ model {m} ready ({s} s)",
+    "ev.modelError": "⚠ cannot load {m}: {e}",
+    "audio.direct": "{reason} → direct audio output",
+    "audio.loopOn": "🔈 AEC loopback active",
+    "audio.noNet": "no network",
+    "audio.offline": "no network, AEC loopback unavailable",
+    "audio.loopFail": "AEC loopback not connected (network?)",
+    "audio.loopLost": "AEC loopback connection lost (network changed?)",
+    "audio.loopNone": "AEC loopback unavailable",
+  },
+};
+/** The tag the server stamped in — a raw, unstamped static/index.html stays Italian. */
+const LOCALE = Object.hasOwn(UI_STRINGS, "__LOCALE__") ? "__LOCALE__" : "it";
+const S = UI_STRINGS[LOCALE];
+// `t` and `tf` are page globals: never shadow them with a local `t` in a callback.
+const t = (key) => S[key] ?? UI_STRINGS.it[key] ?? key;
+const tf = (key, vars) =>
+  t(key).replace(/\{(\w+)\}/g, (whole, name) => (name in vars ? String(vars[name]) : whole));
+/** Number layout of the same locale: `1,5k` in Italian, `1.5k` in English. */
+const NUM = LOCALE === "it" ? "it-IT" : "en-US";
+
+// The markup ships in Italian (also what an unstamped file must show): every localisable
+// element carries a data-i18n / -title / -aria / -ph attribute and is filled from the
+// catalogue once, at start-up — the page never changes language while it is open.
+function applyLocale() {
+  document.documentElement.lang = LOCALE;
+  document.documentElement.style.setProperty("--cut", JSON.stringify(t("msg.cut")));
+  for (const el of document.querySelectorAll("[data-i18n]")) el.textContent = t(el.dataset.i18n);
+  for (const el of document.querySelectorAll("[data-i18n-title]")) el.title = t(el.dataset.i18nTitle);
+  for (const el of document.querySelectorAll("[data-i18n-aria]"))
+    el.setAttribute("aria-label", t(el.dataset.i18nAria));
+  for (const el of document.querySelectorAll("[data-i18n-ph]")) el.placeholder = t(el.dataset.i18nPh);
+}
+applyLocale();
+// tag injected by the server when it serves this file: if it ever differs from ours,
+// the UI on screen is outdated and reloads itself (no more stale tabs after a change).
+const UI_VERSION = "<!--UIVER-->";
+async function checkUiVersion() {
+  try {
+    const html = await (await fetch("/", { cache: "no-store" })).text();
+    const m = html.match(/UI_VERSION = "([^"]+)"/);
+    if (m && m[1] !== UI_VERSION) location.reload();
+  } catch {}
+}
+setInterval(checkUiVersion, 20000);
+// ── AudioWorklets (inline) ──
+const CAPTURE_WORKLET = `
+class Capture extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = new Int16Array(512); this.n = 0; this.peak = 0; }
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (ch) for (let i = 0; i < ch.length; i++) {
+      const s = Math.max(-1, Math.min(1, ch[i]));
+      this.peak = Math.max(this.peak, Math.abs(s));
+      this.buf[this.n++] = s * 32767;
+      if (this.n === 512) {
+        const out = this.buf; this.buf = new Int16Array(512); this.n = 0;
+        this.port.postMessage({ pcm: out.buffer, peak: this.peak }, [out.buffer]);
+        this.peak = 0;
+      }
+    }
+    return true;
+  }
+}
+registerProcessor('capture', Capture);`;
+
+const PLAYER_WORKLET = `
+class Player extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this.ring = new Float32Array(sampleRate * 60); this.r = 0; this.w = 0; this.started = false;
+    this.port.onmessage = (e) => {
+      if (e.data.flush) { this.r = this.w = 0; this.started = false; return; }
+      const pcm = new Int16Array(e.data.pcm);
+      for (let i = 0; i < pcm.length; i++) {
+        this.ring[this.w] = pcm[i] / 32768; this.w = (this.w + 1) % this.ring.length;
+      }
+    };
+  }
+  avail() { return (this.w - this.r + this.ring.length) % this.ring.length; }
+  process(_in, outputs) {
+    const out = outputs[0][0];
+    // small jitter buffer (~60 ms) before starting a burst, to avoid crackles
+    if (!this.started && this.avail() < sampleRate * 0.06) { out.fill(0); return true; }
+    this.started = true;
+    for (let i = 0; i < out.length; i++) {
+      if (this.r === this.w) { out[i] = 0; this.started = false; continue; }
+      out[i] = this.ring[this.r]; this.r = (this.r + 1) % this.ring.length;
+    }
+    return true;
+  }
+}
+registerProcessor('player', Player);`;
+
+const workletURL = (code) => URL.createObjectURL(new Blob([code], { type: "application/javascript" }));
+
+let ws, micCtx, playCtx, playerNode, playerGain, micStream, micOn = true, voiceOn = true,
+    rate = 24000;
+let analyser = null, playTap = null;                 // tap on the player output → the dot's bot level
+let micLvl = 0, dotLvl = 0, orbLvl = 0, dotV = "", orbV = "";   // mic level, the two smoothed levels, last writes
+let botBubble = null, reconnectTimer = null, loopback = null;
+/** Another window took the single client slot: this one is a spectator from now on. */
+let takenOver = false;
+
+function setState(s) {
+  $("orb").className = s;
+  $("stateLabel").textContent = S["state." + s] ?? s;   // a state without a key shows itself
+}
+function scrollDown() { const m = $("log"); m.scrollTop = m.scrollHeight; }
+
+function addMsg(cls, text, info, cp) {
+  const d = document.createElement("div");
+  d.className = "msg " + cls;
+  const body = document.createElement("div");
+  body.className = "body";
+  body.textContent = text;
+  d.appendChild(body);
+  if (info) {
+    const i = document.createElement("div");
+    i.className = "info";
+    i.textContent = info;
+    d.appendChild(i);
+  }
+  // cp = the checkpoint id the server gave this history line: what ⟲ sends back
+  if (cp !== undefined && cp !== null) stampLine(d, cp);
+  $("log").appendChild(d); scrollDown();
+  return d;
+}
+
+/** Give a rendered line its checkpoint: the id ⟲ sends back, and the button that sends it.
+ *  Bubbles of an answer are created while it streams (no id yet) and stamped here, on
+ *  `assistant_done` — that is the moment the line enters the server's history. */
+function stampLine(el, cp) {
+  el.dataset.cp = String(cp);
+  if (!el.querySelector(":scope > .rew")) el.appendChild(rewindBtn(cp));
+}
+function addEvent(text) {
+  const d = document.createElement("div");
+  d.className = "event";
+  d.textContent = text;
+  $("log").appendChild(d); scrollDown();
+}
+function botAppend(sentence) {
+  if (!botBubble) botBubble = addMsg("bot", "");
+  const body = botBubble.querySelector(".body");
+  body.textContent = (body.textContent + " " + sentence).trim();
+  scrollDown();
+}
+function botInfo(text) {
+  if (!botBubble) botBubble = addMsg("bot", "");
+  const i = document.createElement("div");
+  i.className = "info";
+  i.textContent = text;
+  botBubble.appendChild(i);
+}
+
+// ── ⟲ rewind the conversation to a checkpoint ──
+// Every chat line the server put in its history carries an id (`hello.history`, the `user`
+// event, `assistant_done`). The button sends one back and waits for `chat_rewound`, which
+// carries the transcript as the server *really* kept it: the DOM is cut only then, and
+// only from the first line on which that transcript ends. So a refused rewind (stale id,
+// a page out of step with the server) costs nothing to undo — and neither does a line the
+// server kept for a reason of its own (a turn `fitHistory` shed while this page was open):
+// the cut is taken from the *last* line the server still has, never from the first one it
+// no longer has. Cards, event lines and 💭 blocks after the cut belong to the erased turns
+// and go with them. The line the button sits on is kept by the server, always.
+let rewindPending = false;
+function setRewindEnabled(on) {
+  rewindPending = !on;
+  for (const b of document.querySelectorAll("#log .rew")) b.disabled = !on;
+}
+function rewindBtn(cp) {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "rew";
+  b.title = t("msg.rew.title");
+  b.setAttribute("aria-label", t("msg.rew.aria"));
+  b.innerHTML = '<span class="glyph" aria-hidden="true">⟲</span>';
+  b.onclick = () => {
+    if (rewindPending) return;                       // one ⟲, one request
+    if (!send({ type: "rewind", id: cp })) return;
+    setRewindEnabled(false);
+    // no ack (the socket died with the request): the buttons come back anyway
+    setTimeout(() => { if (rewindPending) setRewindEnabled(true); }, 4000);
+  };
+  return b;
+}
+function onRewound(ev) {
+  setRewindEnabled(true);
+  if (!ev.ok) { addEvent(t("msg.rew.lost")); return; }
+  const alive = new Set((ev.history || [])
+    .filter((m) => m.id !== undefined && m.id !== null)
+    .map((m) => Number(m.id)));
+  const cp = (n) => (n.dataset.cp !== undefined ? Number(n.dataset.cp) : null);
+  const nodes = [...$("log").children];
+  // first line the server dropped — without it nothing shown here was cut at all
+  const dead = nodes.findIndex((n) => cp(n) !== null && !alive.has(cp(n)));
+  // nothing on screen is missing from the kept transcript: the rewind changed no line the
+  // page shows (it can still have cancelled an answer that was being given right then)
+  if (dead < 0) { addEvent(tf("msg.rew.done", { n: 0 })); return; }
+  // …but the cut goes *after the last line the server kept*: the drop is a suffix of the
+  // transcript, while a line can be dead for another reason too (a turn `fitHistory` shed
+  // while this page was open) — cutting at the first dead line would take the kept turns
+  // with it. Everything after the last survivor belongs to the erased tail: cards, event
+  // lines and 💭 blocks too, whether or not it carries an id of its own.
+  let lastAlive = -1;
+  nodes.forEach((n, i) => { const id = cp(n); if (id !== null && alive.has(id)) lastAlive = i; });
+  const cut = Math.max(dead, lastAlive + 1);
+  let dropped = 0;
+  for (let i = nodes.length - 1; i >= cut; i--) {
+    if (nodes[i].classList.contains("msg")) dropped++;
+    nodes[i].remove();
+  }
+  // the card maps would keep handing back unmounted elements: drop the dead keys
+  for (const k in cards) if (!cards[k].isConnected) delete cards[k];
+  for (const k in toolCards) if (!toolCards[k].isConnected) delete toolCards[k];
+  if (botBubble && !botBubble.isConnected) botBubble = null;
+  if (thinkBlock && !thinkBlock.isConnected) thinkBlock = null;
+  addEvent(tf("msg.rew.done", { n: dropped }));
+}
+
+// ── 💭 reasoning (thinking): one collapsed block per turn, streamed while it grows ──
+let thinkBlock = null;
+function onReasoning(text) {
+  if (!thinkBlock) {
+    thinkBlock = document.createElement("details");
+    thinkBlock.className = "think busy";
+    thinkBlock.innerHTML =
+      '<summary><span class="ico">💭</span> ' + t("think.label") + '<span class="cnt"></span>' +
+      '<span class="peek"></span></summary><div class="body"></div>';
+    $("log").appendChild(thinkBlock);
+  } else {
+    thinkBlock.classList.add("busy");
+  }
+  const body = thinkBlock.querySelector(".body");
+  body.textContent += text;
+  const full = body.textContent;
+  thinkBlock.querySelector(".cnt").textContent = tf("think.chars", { n: full.length });
+  thinkBlock.querySelector(".peek").textContent = full.replace(/\s+/g, " ").trim().slice(0, 160);
+  // follow the tail only when the reader is already at the bottom (never yank the view)
+  const m = $("log");
+  if (m.scrollHeight - m.scrollTop - m.clientHeight < 120) m.scrollTop = m.scrollHeight;
+}
+function onReasoningDone() { if (thinkBlock) thinkBlock.classList.remove("busy"); }
+
+// ── the banner above the chat: pending timers, running commands, running watches ──
+// The server owns the list — `hello.tasks` when the page connects, then a whole `tasks`
+// event on every change (set, rang, finished, cancelled). Each chip counts its own
+// deadline down locally: `due_in_ms` belongs to the frame that carried it, so the page's
+// clock and the server's never have to agree. A ✕ drops the chip and asks; the event that
+// comes back is the real confirmation (it also restores a chip that could not be stopped).
+// A watch (🔁) counts down to its NEXT check — the loop itself has no end.
+let banner = [];
+function onTasks(list) {
+  banner = (Array.isArray(list) ? list : []).map((task) => ({
+    id: String(task.id),
+    kind: task.kind === "command" || task.kind === "watch" ? task.kind : "timer",
+    label: String(task.label ?? ""),
+    due: task.due_in_ms === undefined || task.due_in_ms === null
+      ? null : Number(task.due_in_ms),
+    at: Date.now(),
+    left: null,
+  }));
+  const bar = $("taskBar");
+  bar.innerHTML = "";
+  for (const task of banner) {
+    const chip = document.createElement("div");
+    chip.className = "taskChip";
+    const ico = document.createElement("span");
+    ico.className = "ico";
+    ico.textContent =
+      task.kind === "timer" ? "⏳" : task.kind === "watch" ? "🔁" : "💻";   // the chat's own words
+    const lbl = document.createElement("span");
+    lbl.className = "lbl";
+    lbl.textContent = task.label;
+    lbl.title = task.label;                    // a long command line shows fully on hover
+    const left = document.createElement("span");
+    left.className = "left";
+    const x = document.createElement("button");
+    x.className = "x";
+    x.type = "button";
+    x.title = t("tasks.cancel");
+    x.setAttribute("aria-label", tf("tasks.cancelAria", { label: task.label }));
+    x.innerHTML =
+      '<svg class="glyph" viewBox="0 0 24 24" aria-hidden="true">' +
+      '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+    x.onclick = () => {
+      x.disabled = true;                       // one ✕, one request — until the answer comes
+      send({ type: "task_cancel", id: task.id });
+      // …and if no answer comes (the reply was lost, the task was already gone), the ✕
+      // gets another try instead of sitting there disabled forever
+      setTimeout(() => { x.disabled = false; }, 2500);
+    };
+    chip.append(ico, lbl, left, x);
+    bar.appendChild(chip);
+    task.left = left;
+  }
+  bar.hidden = !banner.length;
+  tickBanner();
+}
+/** 42 000 → «0:42»; a deadline already passed shows «0:00» until the server's own
+ *  `tasks` event takes the chip away (a ring, a finished command — never counted negative). */
+function fmtLeft(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+function tickBanner() {
+  for (const task of banner) {
+    if (!task.left) continue;
+    task.left.textContent = task.due === null
+      ? ""
+      : fmtLeft(task.due - (Date.now() - task.at));
+  }
+}
+setInterval(tickBanner, 500);   // costs nothing: it only writes a text node per chip
+
+// ── command cards (approval + result of run_command) ──
+const cards = {};
+function cmdCard(key, command) {
+  let c = cards[key];
+  if (c) return c;
+  c = document.createElement("div");
+  c.className = "cmd";
+  c.innerHTML = '<div class="head">' + t("cmd.head") + '</div><code></code>';
+  c.querySelector("code").textContent = "$ " + command;
+  $("log").appendChild(c);
+  cards[key] = c;
+  botBubble = null; scrollDown();
+  return c;
+}
+function cardStatus(c, text) {
+  const old = c.querySelectorAll(":scope > .status");
+  const st = old.length ? old[old.length - 1] : document.createElement("div");
+  if (!old.length) c.appendChild(st);
+  st.className = "status";
+  st.textContent = text;
+  scrollDown();
+  return st;
+}
+function onCommandRequest(ev) {
+  const c = cmdCard("req" + ev.id, ev.command);
+  c.classList.add("pending");
+  c.querySelector(".head").textContent = t("cmd.wants");
+  if (ev.reason && !c.querySelector(".why")) {
+    const w = document.createElement("div");
+    w.className = "why";
+    w.textContent = ev.reason;
+    c.appendChild(w);
+  }
+  if (!c.querySelector(".btns")) {
+    const b = document.createElement("div");
+    b.className = "btns";
+    b.innerHTML = '<button class="ok"><svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>' + t("cmd.yes") + '</button>' +
+                  '<button class="no"><svg class="glyph" viewBox="0 0 24 24" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' + t("cmd.no") + '</button>' +
+                  '<span class="status">' + t("cmd.voiceHint") + '</span>';
+    b.querySelector(".ok").onclick = () => send({ type: "approve", id: ev.id, ok: true });
+    b.querySelector(".no").onclick = () => send({ type: "approve", id: ev.id, ok: false });
+    c.appendChild(b);
+  }
+  cards.lastReq = c;
+  scrollDown();
+}
+function onCommandResolved() {
+  const c = cards.lastReq;
+  if (c) c.classList.remove("pending");
+  const b = c && c.querySelector(".btns");
+  if (b) b.remove();
+}
+function onCommandStart(ev) {
+  const wanted = "$ " + ev.command;
+  let c = cards["run" + ev.id];
+  if (!c && cards.lastReq && cards.lastReq.querySelector("code").textContent === wanted)
+    c = cards.lastReq;
+  if (!c) c = cmdCard("run" + ev.id, ev.command);
+  cards["run" + ev.id] = c;
+  cards.lastReq = null;
+  c.classList.remove("pending");          // it runs now: the approval UI must be gone
+  const btns = c.querySelector(".btns");
+  if (btns) btns.remove();
+  c.querySelector(".head").textContent = ev.auto ? t("cmd.runAuto") : t("cmd.run");
+  cardStatus(c, t("cmd.running"));
+}
+function onCommandResult(ev) {
+  const c = cards["run" + ev.id] || cards.lastReq || cmdCard("run" + ev.id, ev.command);
+  cards.lastReq = null;
+  if (ev.status === "denied") { cardStatus(c, t("cmd.denied")); return; }
+  if (ev.status === "cancelled") { cardStatus(c, t("cmd.stopped")); return; }   // ✕ in the banner
+  cardStatus(c, (ev.status === "exit 0" ? "✅ " : "⚠ ") + ev.status);
+  if (ev.output && !c.querySelector("details")) {
+    const d = document.createElement("details");
+    d.innerHTML = '<summary>' + tf("cmd.output", { n: ev.output.split("\n").length }) + '</summary><pre></pre>';
+    d.querySelector("pre").textContent = ev.output;
+    c.appendChild(d);
+  }
+}
+
+// ── tool-call cards (one line of summary, input/output behind <details>) ──
+const toolCards = {};
+function pretty(v) {
+  if (typeof v === "string") { try { v = JSON.parse(v); } catch { return v; } }
+  const one = JSON.stringify(v);
+  return one && one.length <= 140 ? one : JSON.stringify(v, null, 2);
+}
+function toolCardFor(ev) {
+  const base = ev.id || `${ev.tool}·${ev.summary || ""}`;
+  let key = base, c = toolCards[key], n = 1;
+  while (c && ev.phase === "start" && c.dataset.done === "1") {   // same id reused next turn
+    key = `${base}#${++n}`;
+    c = toolCards[key];
+  }
+  if (c) return c;
+  c = document.createElement("div");
+  c.className = "tool";
+  c.innerHTML =
+    '<div class="head"><span class="ico">🔧</span><span class="name"></span>' +
+    '<span class="sum"></span><span class="badge">' + t("tool.running") + '</span></div>' +
+    '<details><summary>' + t("tool.details") + '</summary>' +
+    '<div class="inblk"><div class="lbl">input</div><pre class="in"></pre></div>' +
+    '<div class="outblk"><div class="lbl">output</div><pre class="out"></pre></div>' +
+    '<div class="meta"></div></details>';
+  $("log").appendChild(c);
+  toolCards[key] = c;
+  botBubble = null;
+  scrollDown();
+  return c;
+}
+function onTool(ev) {
+  const c = toolCardFor(ev);
+  c.querySelector(".name").textContent = ev.tool || "?";
+  if (ev.summary) c.querySelector(".sum").textContent = ev.summary;   // "end" has no summary
+  if (ev.phase === "start") {
+    c.classList.remove("done", "err");
+    c.dataset.done = "";
+    c.querySelector(".badge").textContent = t("tool.running");
+    const hasIn = ev.args !== undefined && ev.args !== null && ev.args !== "" &&
+                  ev.args !== "{}";
+    c.querySelector(".inblk").hidden = !hasIn;
+    if (hasIn) c.querySelector(".in").textContent = pretty(ev.args);
+  } else {
+    c.dataset.done = "1";
+    c.classList.add("done");
+    c.classList.toggle("err", !!ev.error);
+    // three outcomes: ⚠ ran and failed, ⛔ refused by the tool gate (never ran),
+    // ✅ ok — a gated call used to be announced as a success, its refusal only in the
+    // small meta line (data/logs/harness.log 12:09:03)
+    c.classList.toggle("blocked", !!ev.blocked && !ev.error);
+    c.querySelector(".badge").textContent =
+      ev.error ? t("tool.error") : ev.blocked ? t("tool.blocked") : "✅ ok";
+    c.querySelector(".outblk").hidden = false;
+    c.querySelector(".out").textContent = ev.result || t("tool.noOutput");
+    c.querySelector(".meta").textContent =
+      [ev.origin, ev.info || ""].filter(Boolean).join(" · ");
+  }
+  scrollDown();
+}
+
+// ── context meter (token usati / n_ctx, la barra accanto al titolo) ──
+// La barra compare solo con un denominatore certo: se l'endpoint non riporta l'n_ctx
+// (total = 0) sparisce, perché una barra senza totale sarebbe un inganno.
+let lastCtx = null;          // l'ultima coppia {used,total} ricevuta: diagnostica in console
+function onContext(ev) {
+  const box = $("ctxBox");
+  const total = Math.max(0, Math.round(ev.total || 0));
+  const used = Math.max(0, Math.round(ev.used || 0));
+  lastCtx = { used, total };
+  if (!total) { box.hidden = true; return; }
+  const pct = Math.min(100, (used / total) * 100);
+  const fill = $("ctxFill");
+  box.hidden = false;
+  fill.style.width = pct.toFixed(1) + "%";
+  fill.className = pct >= 90 ? "hot" : pct >= 70 ? "warn" : "";
+  $("ctxText").textContent = `${tok(used)} / ${tok(total)}`;
+  $("ctxPct").textContent = pct.toFixed(0) + "%";
+  $("ctxPct").style.color = pct >= 90 ? "#ff6b6b" : pct >= 70 ? "var(--warn)" : "";
+  box.title = tf("ctx.title", {
+    used: used.toLocaleString(NUM),
+    total: total.toLocaleString(NUM),
+    pct: pct.toFixed(0),
+  });
+}
+
+// 950 → «950», 1000 → «1k», 32768 → «32,8k»/«32.8k», 1_500_000 → «1,5M»/«1.5M»: la barra
+// sta in 92 px, i numeri interi non ci starebbero. k/M come li arrotonda il CLI pi:
+// potenze di dieci, un decimale, il separatore decimale della lingua attiva.
+function tok(n) {
+  if (n < 1e3) return String(n);
+  const [v, k] = n >= 1e6 ? [n / 1e6, "M"] : [n / 1e3, "k"];
+  const [whole, frac] = v.toFixed(1).split(".");
+  return whole + (frac === "0" ? "" : (LOCALE === "it" ? "," : ".") + frac) + k;
+}
+
+// ── voices (the selector in the settings drawer) ──
+// One entry per preset of the TTS pack; the server echoes the list back (`voices` event)
+// when a pick is refused, so the selector can never show a voice the pack has not.
+function fillVoices(voices, current, hz) {
+  const sel = $("voiceSel");
+  const list = voices && voices.length ? voices : [current || "giovanni"];
+  sel.innerHTML = "";
+  for (const v of list) {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = v;
+    sel.appendChild(o);
+  }
+  if (current) sel.value = current;
+  $("voiceMeta").textContent = tf("voice.meta", { hz: hz || rate, n: list.length });
+}
+
+// ── skills (checkbox list in the settings drawer) ──
+// The server only ever sends the skills found in SKILLS_DIR; which of them are *active*
+// is the user's choice, and only those reach the model's context (prompt + tools).
+let skillRows = [], skillsDirText = "";
+function fillSkills(list, dir) {
+  skillRows = list || [];
+  if (dir !== undefined && dir !== null) skillsDirText = dir || "";
+  const box = $("skillList");
+  box.innerHTML = "";
+  if (!skillRows.length) {
+    const d = document.createElement("div");
+    d.className = "empty";
+    d.textContent = skillsDirText
+      ? tf("skills.empty.in", { dir: skillsDirText })
+      : t("skills.empty");
+    box.appendChild(d);
+  }
+  for (const s of skillRows) {
+    const l = document.createElement("label");
+    l.title = s.description;
+    l.classList.toggle("off", !s.active);
+    const c = document.createElement("input");
+    c.type = "checkbox";
+    c.checked = !!s.active;
+    c.onchange = () => {
+      s.active = c.checked;
+      l.classList.toggle("off", !s.active);
+      send({ type: "skills_set",
+             active: skillRows.filter((x) => x.active).map((x) => x.name) });
+    };
+    l.appendChild(c);
+    l.appendChild(document.createTextNode(s.name));
+    box.appendChild(l);
+  }
+  const dirEl = $("skillsDir");
+  if (dirEl) dirEl.textContent = skillsDirText;
+}
+
+// ── models ──
+let currentModel = "", viaPi = false, modelRefreshPending = false, modelList = [];
+// The dropdown holds every model pi can reach (100+), so it filters itself: type straight
+// into the selector (no separate box) and the query becomes its own first, disabled line:
+//   🔍 «gemma» · 5 di 120    Backspace edits it, Esc clears it, picking a model clears it.
+const FILTER_MARK = "__filter__";
+let modelQuery = "", modelTitleBase = t("model.api.title");
+
+function applyModelFilter() {
+  const sel = $("modelSel");
+  const q = modelQuery.trim();
+  const hits = q ? modelList.filter(m => m.toLowerCase().includes(q.toLowerCase()))
+                 : modelList.slice();
+  const matched = hits.length;
+  sel.innerHTML = "";
+  if (q) {                                          // the query lives inside the selector
+    const head = document.createElement("option");
+    head.value = FILTER_MARK;
+    head.disabled = true;
+    head.textContent = tf("model.filter.head", { q, n: matched, total: modelList.length });
+    sel.appendChild(head);
+  }
+  // the active model stays reachable even when the query hides it — appended *last*, so
+  // the first line under the query is always the first real match (what Enter picks)
+  if (currentModel && !hits.includes(currentModel)) hits.push(currentModel);
+  for (const m of hits) {
+    const o = document.createElement("option");
+    o.value = o.textContent = m;
+    sel.appendChild(o);
+  }
+  if (q) sel.value = FILTER_MARK;
+  else if (hits.length) sel.value = hits.includes(currentModel) ? currentModel : hits[0];
+  sel.classList.toggle("filtering", !!q);
+  sel.title = modelTitleBase + (q
+    ? tf("model.filter.title", { q, n: matched, total: modelList.length })
+    : tf("model.list.title", { n: modelList.length }));
+}
+
+function fillModels(models, current, usePi) {
+  if (!!usePi !== viaPi) modelQuery = "";           // other leg → other model names
+  currentModel = current;
+  viaPi = !!usePi;
+  modelList = models.slice();
+  modelTitleBase = viaPi ? t("model.pi.title") : t("model.api.title");
+  applyModelFilter();
+  $("modelSel").disabled = false;
+  $("modeBadge").classList.toggle("on", viaPi);
+}
+
+// ── audio setup ──
+async function setupAudio() {
+  // playback context at the TTS rate
+  playCtx = new AudioContext({ sampleRate: rate, latencyHint: "interactive" });
+  await playCtx.audioWorklet.addModule(workletURL(PLAYER_WORKLET));
+  playerNode = new AudioWorkletNode(playCtx, "player", { outputChannelCount: [1] });
+  playerGain = playCtx.createGain();             // the one mute point for the assistant's voice
+  playerNode.connect(playerGain);
+  playerGain.connect(playCtx.destination);       // audible immediately; loopback upgrades it
+  playerGain.gain.value = voiceOn ? 1 : 0;        // honour the 🔊 mute from the first frame
+  // tap the player *before* the gain node: playerGain is disconnected/reconnected by every
+  // routing switch (direct ⇄ AEC loopback), playerNode never is. Feeds the pulsing dot.
+  analyser = playCtx.createAnalyser();
+  analyser.fftSize = 1024;
+  playerNode.connect(analyser);
+  playTap = new Float32Array(analyser.fftSize);
+  playbackMode = "init";
+  await routePlayback($("aecChk").checked);
+
+  // capture: Chromium's own echo cancellation / noise suppression / AGC
+  micStream = await navigator.mediaDevices.getUserMedia({ audio: {
+    echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
+  micCtx = new AudioContext({ sampleRate: 16000, latencyHint: "interactive" });
+  await micCtx.audioWorklet.addModule(workletURL(CAPTURE_WORKLET));
+  const src = micCtx.createMediaStreamSource(micStream);
+  const cap = new AudioWorkletNode(micCtx, "capture");
+  cap.port.onmessage = (e) => {
+    micLvl = micOn ? Math.min(1, e.data.peak * 1.4) : 0;   // 31 msg/s → the dot's mic level
+    if (micOn && ws && ws.readyState === 1) ws.send(e.data.pcm);
+  };
+  src.connect(cap);
+  // keep the graph pulled without making the mic audible
+  const sink = micCtx.createGain(); sink.gain.value = 0; cap.connect(sink); sink.connect(micCtx.destination);
+  if (playCtx.state !== "running" || micCtx.state !== "running") throw new Error("suspended");
+}
+
+// Route TTS through a local WebRTC loopback so Chromium's AEC uses it as the echo reference.
+// WebRTC never uses 127.0.0.1: it needs a real interface address (e.g. wlan0). Offline, or when
+// Wi-Fi drops, ICE can't connect → audio would be silent. So: verify the loopback connects,
+// otherwise (or when it fails later) play directly, and retry the loopback when the network returns.
+let playbackMode = "direct", retryTimer = null;
+function closeLoopback() {
+  if (!loopback) return;
+  loopback.pc1.close(); loopback.pc2.close(); loopback.audio.srcObject = null; loopback = null;
+}
+function playDirect(reason) {
+  closeLoopback();
+  playerGain?.disconnect();
+  playerGain?.connect(playCtx.destination);
+  if (playbackMode !== "direct" && reason) addEvent(tf("audio.direct", { reason }));
+  playbackMode = "direct";
+  clearTimeout(retryTimer);
+  if ($("aecChk").checked) retryTimer = setTimeout(() => routePlayback(true), 15000);
+}
+async function routePlayback(useLoopback) {
+  clearTimeout(retryTimer);
+  if (!useLoopback) { playDirect(""); clearTimeout(retryTimer); return; }
+  if (!navigator.onLine && playbackMode !== "loopback") {   // no interface up: don't even try
+    playDirect(playbackMode === "direct" ? "" : t("audio.offline"));
+    return;
+  }
+  closeLoopback();
+  try {
+    const dest = playCtx.createMediaStreamDestination();
+    const pc1 = new RTCPeerConnection(), pc2 = new RTCPeerConnection();
+    pc1.onicecandidate = (e) => e.candidate && pc2.addIceCandidate(e.candidate).catch(() => {});
+    pc2.onicecandidate = (e) => e.candidate && pc1.addIceCandidate(e.candidate).catch(() => {});
+    const audio = new Audio(); audio.autoplay = true;
+    pc2.ontrack = (e) => { audio.srcObject = e.streams[0]; audio.play().catch(() => {}); };
+    dest.stream.getTracks().forEach((track) => pc1.addTrack(track, dest.stream));
+    const offer = await pc1.createOffer();
+    await pc1.setLocalDescription(offer); await pc2.setRemoteDescription(offer);
+    const answer = await pc2.createAnswer();
+    await pc2.setLocalDescription(answer); await pc1.setRemoteDescription(answer);
+    const connected = await new Promise((resolve) => {
+      if (pc1.connectionState === "connected") return resolve(true);
+      const timeout = setTimeout(() => resolve(false), 2000);
+      pc1.addEventListener("connectionstatechange", () => {
+        if (pc1.connectionState === "connected") { clearTimeout(timeout); resolve(true); }
+        if (pc1.connectionState === "failed") { clearTimeout(timeout); resolve(false); }
+      });
+    });
+    if (!connected) { pc1.close(); pc2.close(); playDirect(t("audio.loopFail")); return; }
+    // switch only once the loopback really carries audio
+    playerGain.disconnect();
+    playerGain.connect(dest);
+    loopback = { pc1, pc2, audio };
+    if (playbackMode !== "loopback" && playbackMode !== "init") addEvent(t("audio.loopOn"));
+    playbackMode = "loopback";
+    pc1.addEventListener("connectionstatechange", () => {
+      if (loopback && loopback.pc1 === pc1 &&
+          (pc1.connectionState === "failed" || pc1.connectionState === "disconnected")) {
+        playDirect(t("audio.loopLost"));
+      }
+    });
+  } catch (err) {
+    console.warn("loopback failed, direct output", err);
+    playDirect(t("audio.loopNone"));
+  }
+}
+window.addEventListener("offline", () => playbackMode === "loopback" && playDirect(t("audio.noNet")));
+window.addEventListener("online", () => $("aecChk").checked && playbackMode !== "loopback" && routePlayback(true));
+
+// ── websocket ──
+function connect() {
+  ws = new WebSocket(`ws://${location.host}/ws`);
+  ws.binaryType = "arraybuffer";
+  ws.onopen = () => { clearTimeout(reconnectTimer); };
+  ws.onclose = (e) => {
+    setState("offline");
+    // The server closes the losing side with 1000 "replaced by a new client" when a second
+    // window/tab opens (only one client is fed). Reconnecting would kick *that* one back and
+    // the two would ping-pong every 1.5 s forever — and each new connection calls
+    // stopActivity() server-side, which silently kills the answer being generated. So the
+    // kicked page stays put and says so; a reload takes the slot again.
+    if (takenOver) return;
+    if (e.code === 1000 && (e.reason || "").startsWith("replaced")) {
+      onSessionTaken();
+      return;
+    }
+    reconnectTimer = setTimeout(connect, 1500);
+  };
+  ws.onmessage = async (e) => {
+    if (typeof e.data !== "string") { playerNode && playerNode.port.postMessage({ pcm: e.data }, [e.data]); return; }
+    const ev = JSON.parse(e.data);
+    // 🧹 ack discipline: everything the server sent before acknowledging the reset belongs
+    // to the chat we just erased (a tool result still on the wire, a denied approval, a
+    // late transcript line) — drop it. 4 s safety net in case the ack never arrives.
+    if (resetBarrier) {
+      if (ev.type === "chat_reset" || Date.now() >= resetBarrier) resetBarrier = 0;
+      else if (STALE_ON_RESET.includes(ev.type)) return;
+    }
+    switch (ev.type) {
+      case "session_taken":
+        // another window took the slot: say it, and stop pretending this one is live
+        onSessionTaken();
+        break;
+      case "hello":
+        fillVoices(ev.voices, ev.voice, ev.rate);
+        fillModels(ev.models || [], ev.model, ev.config.llm_via_pi);
+        $("piChk").checked = !!ev.config.llm_via_pi;
+        $("cmdSel").value = ev.config.cmd_mode || "auto";
+        $("bargeChk").checked = ev.config.barge_in;
+        $("halfChk").checked = ev.config.half_duplex;
+        $("thinkChk").checked = !!ev.config.thinking;
+        $("decisionSel").value = ev.config.decision_mode;
+        if (ev.rate !== rate && playCtx) { location.reload(); return; }
+        rate = ev.rate;
+        if (!$("log").children.length) {
+          for (const m of ev.history)
+            addMsg(m.role === "user" ? "user" : "bot", m.content, undefined, m.id);
+          if (!ev.history.length) addEvent(t("msg.ready"));
+        }
+        if (ev.pending_command) onCommandRequest(ev.pending_command);
+        onTasks(ev.tasks || []);                // the banner is right from the first frame
+        fillSkills(ev.skills || [], ev.skills_dir);
+        setState(ev.state);
+        if (ev.context) onContext(ev.context);   // la barra è giusta già dal primo frame
+        break;
+      case "state": setState(ev.state); break;
+      case "partial": $("partial").textContent = ev.text ? "🎤 " + ev.text : ""; break;
+      case "user": $("partial").textContent = ""; botBubble = null; thinkBlock = null;
+        addMsg("user", ev.text, ev.info, ev.id); break;
+      case "reasoning": onReasoning(ev.text); break;      // 💭 collapsed block above the answer
+      case "assistant": onReasoningDone(); botAppend(ev.text); break;
+      case "assistant_done": onReasoningDone();
+        // the line is in the history now: stamp its checkpoint on the bubble ⟲ will use
+        if (botBubble && ev.id !== undefined && ev.id !== null) stampLine(botBubble, ev.id);
+        botBubble = null; break;  // next answer gets its own bubble
+      case "assistant_cancel": onReasoningDone();
+        if (botBubble) botBubble.classList.add("cut"); botBubble = null; break;
+      case "latency":
+        botInfo(tf("ev.latency", { a: ev.first_token_ms, b: ev.first_audio_ms }));
+        break;
+      case "flush": playerNode && playerNode.port.postMessage({ flush: true }); break;
+      case "context": onContext(ev); break;   // barra contesto aggiornata
+      case "event": addEvent(ev.text); break;
+      case "chat_rewound": onRewound(ev); break;   // ⟲ ack: cut here, from this line on
+      case "tasks": onTasks(ev.tasks); break;   // the banner above the chat, whole
+      case "tool": onTool(ev); break;
+      case "command_request": onCommandRequest(ev); break;
+      case "command_resolved": onCommandResolved(); break;
+      case "command_start": onCommandStart(ev); break;
+      case "command_result": onCommandResult(ev); break;
+      case "models": fillModels(ev.models, ev.current, ev.via_pi);
+        if (ev.via_pi !== undefined) $("piChk").checked = !!ev.via_pi;
+        if (modelRefreshPending) {          // our ↻ got an answer: say so, then stop spinning
+          modelRefreshPending = false;
+          $("modelRefresh").disabled = false;
+          $("modelRefresh").classList.remove("spin");
+          addEvent(tf("ev.models", { n: ev.models.length }));
+        }
+        break;
+      case "skills": fillSkills(ev.skills, ev.dir); break;
+      case "voices": fillVoices(ev.voices, ev.current, ev.rate || rate); break;
+      case "model_loading": $("modelSel").disabled = true;
+        addEvent(tf("ev.loading", { m: ev.model })); break;
+      case "model_ready": currentModel = ev.model; $("modelSel").disabled = false;
+        applyModelFilter();                       // the header shows the model that is live now
+        addEvent(tf("ev.ready", { m: ev.model, s: ev.seconds })); break;
+      case "model_error": $("modelSel").disabled = false; currentModel = ev.current;
+        applyModelFilter();                       // back to the model that is still live
+        addEvent(tf("ev.modelError", { m: ev.model, e: ev.error })); break;
+    }
+  };
+}
+const send = (obj) => ws && ws.readyState === 1 && ws.send(JSON.stringify(obj));
+const setConfig = (key, value) => send({ type: "config", [key]: value });
+
+// ── controls ──
+// 🧹 wipes every trace of the current chat, in the DOM *and* in the small buffers that
+// live next to it (the tool/command card maps, the live transcript line, the bubble).
+function clearChat() {
+  $("log").innerHTML = "";
+  for (const k in cards) delete cards[k];       // incl. lastReq: no stale card can be reused
+  for (const k in toolCards) delete toolCards[k];
+  botBubble = null;
+  thinkBlock = null;
+  $("partial").textContent = "";
+}
+// event types that are chat content: while waiting for the server's chat_reset ack these
+// are old-chat leftovers and must not rebuild a card or a bubble in the fresh log
+const STALE_ON_RESET = [
+  "user", "assistant", "assistant_done", "assistant_cancel", "partial", "latency",
+  "event", "tool", "reasoning", "command_request", "command_resolved", "command_start",
+  "command_result",
+];
+let resetBarrier = 0;   // >0 → ms deadline until which stale events are dropped
+
+function sendText() {
+  const input = $("textIn");
+  if (takenOver) return;   // no socket: typing here would go nowhere, and say nothing
+  if (input.value.trim()) { send({ type: "text", text: input.value }); input.value = ""; }
+}
+
+/**
+ * Another window took the client slot (`session_taken`, or the close that follows it).
+ * The chat stays readable, but the window must stop *looking* interactive: a text box
+ * whose every line is silently dropped is worse than one that says it is off.
+ */
+function onSessionTaken() {
+  if (takenOver) return;
+  takenOver = true;
+  clearTimeout(reconnectTimer);
+  setState("offline");
+  addEvent(t("msg.replaced"));
+  $("textIn").disabled = true;
+  $("sendBtn").disabled = true;
+  // a window that is no longer being fed must stop capturing: the tab would otherwise
+  // keep the mic on (and keep pushing frames at a socket that is already closed)
+  if (micOn) setMicOn(false);
+}
+$("textIn").addEventListener("keydown", (e) => { if (e.key === "Enter") sendText(); });
+$("sendBtn").onclick = sendText;
+// two independent mutes — both icon buttons: `.off` recolours the button *and* swaps
+// its glyph (the muted SVG sits in the markup, CSS shows one of the two).
+// the mic button (footer) stops the microphone only — the assistant keeps talking;
+// the speaker button (header, left of ↻) silences the assistant's voice only —
+// the mic keeps listening (the TTS keeps streaming either way, only output is muted)
+function setMicOn(on) {
+  micOn = on;
+  $("micBtn").classList.toggle("off", !on);
+  micStream && micStream.getAudioTracks().forEach((track) => (track.enabled = on));
+}
+function setVoiceOn(on) {
+  voiceOn = on;
+  $("voiceBtn").classList.toggle("off", !on);
+  $("voiceBtn").setAttribute("aria-pressed", String(on));
+  if (playerGain && playCtx) playerGain.gain.setTargetAtTime(on ? 1 : 0, playCtx.currentTime, 0.015);
+}
+$("micBtn").onclick = () => setMicOn(!micOn);
+$("voiceBtn").onclick = () => setVoiceOn(!voiceOn);
+
+// ── level-driven pulsing: your voice at the input, the assistant's on its own spot ──
+// Ownership is strict: the footer circle reads ONLY the mic (micLvl, ~31 msg/s straight
+// from the capture worklet) and the header orb reads ONLY the assistant's output (the RMS
+// of what the player is about to emit). While you talk, nothing but your circle moves.
+// One rAF loop, fast attack / slower release, so both breathe instead of flickering;
+// it only writes one CSS custom property per element (no layout reads, no style thrash).
+function playLevel() {
+  if (!analyser || !voiceOn) return 0;             // voice muted → no voice to pulse with
+  analyser.getFloatTimeDomainData(playTap);
+  let s = 0;
+  for (let i = 0; i < playTap.length; i++) s += playTap[i] * playTap[i];
+  return Math.min(1, Math.sqrt(s / playTap.length) * 4.5);
+}
+function dotLoop() {
+  micLvl *= 0.9;                                  // decays between two capture messages
+  dotLvl = micLvl > dotLvl ? micLvl : dotLvl * 0.88;        // you  → the circle at the input
+  const bot = playLevel();
+  orbLvl = bot > orbLvl ? bot : orbLvl * 0.88;              // assistant → the header orb
+  const dv = dotLvl < 0.001 ? "0" : dotLvl.toFixed(3);
+  if (dv !== dotV) { $("talkDot").style.setProperty("--lvl", dv); dotV = dv; }
+  const ov = orbLvl < 0.001 ? "0" : orbLvl.toFixed(3);
+  if (ov !== orbV) { $("orb").style.setProperty("--lvl", ov); orbV = ov; }
+  requestAnimationFrame(dotLoop);
+}
+requestAnimationFrame(dotLoop);
+$("stopBtn").onclick = () => send({ type: "stop" });
+$("resetBtn").onclick = () => {
+  send({ type: "reset" });
+  resetBarrier = Date.now() + 4000;      // until the server confirms, the old chat still leaks
+  clearChat();
+  addEvent(t("msg.newChat"));
+};
+// ⚙ hangs from the header's top-right panel and drops the drawer right underneath it:
+// one helper keeps the button's aria-expanded and the panel's class in step, and every
+// opening brings a fresh model list + skill list (one may have been installed meanwhile).
+function setSettingsOpen(open) {
+  $("settings").classList.toggle("open", open);
+  $("settingsBtn").setAttribute("aria-expanded", String(open));
+  if (open) {
+    send({ type: "models_refresh", force: false });   // cheap: honours the server-side cache
+    send({ type: "skills_refresh" });                 // in case a skill was installed meanwhile
+  } else {
+    $("settingsBtn").focus();                         // ✕ / Esc → back to the button that opened it
+  }
+}
+$("settingsBtn").onclick = () => setSettingsOpen(!$("settings").classList.contains("open"));
+$("settingsClose").onclick = () => setSettingsOpen(false);
+document.addEventListener("keydown", (e) => {
+  // Esc closes the drawer — except inside the model selector, where Esc clears its filter
+  if (e.key === "Escape" && e.target !== $("modelSel") &&
+      $("settings").classList.contains("open")) setSettingsOpen(false);
+});
+// type straight into the selector: printable keys grow the query, Backspace edits it,
+// Esc clears it, **Enter picks what you typed** (the first/only hit — or the one you
+// reached with the arrows). preventDefault() beats Chromium's native type-ahead (which
+// would jump through the unfiltered list instead of narrowing it).
+$("modelSel").addEventListener("keydown", (e) => {
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === "Backspace" || e.key === "Escape") {
+    if (!modelQuery) return;
+    e.preventDefault();
+    modelQuery = e.key === "Escape" ? "" : modelQuery.slice(0, -1);
+    applyModelFilter();
+  } else if (e.key === "Enter") {
+    if (!modelQuery) return;              // no query → the native pick already fired onchange
+    e.preventDefault();
+    const sel = $("modelSel");
+    // while a query is active the selected line is the (disabled) query itself: Enter then
+    // means «the first thing I typed my way to». An arrow key had already moved sel.value.
+    pickModel(
+      sel.value !== FILTER_MARK ? sel.value : sel.querySelector("option:not([disabled])")?.value,
+    );
+  } else if (e.key.length === 1) {
+    e.preventDefault();
+    modelQuery += e.key;
+    applyModelFilter();
+  }
+});
+$("modelRefresh").onclick = () => {
+  if ($("modelRefresh").disabled) return;
+  $("modelRefresh").disabled = true;
+  $("modelRefresh").classList.add("spin");
+  modelRefreshPending = true;
+  send({ type: "models_refresh", force: true });              // re-run `pi --list-models` now
+  setTimeout(() => {                                          // no answer → stop spinning anyway
+    if (!modelRefreshPending) return;
+    modelRefreshPending = false;
+    $("modelRefresh").disabled = false;
+    $("modelRefresh").classList.remove("spin");
+  }, 8000);
+};
+$("bargeChk").onchange = (e) => setConfig("barge_in", e.target.checked);
+$("halfChk").onchange = (e) => setConfig("half_duplex", e.target.checked);
+$("aecChk").onchange = (e) => routePlayback(e.target.checked);
+$("thinkChk").onchange = (e) => setConfig("thinking", e.target.checked);
+$("cmdSel").onchange = (e) => setConfig("cmd_mode", e.target.value);
+$("decisionSel").onchange = (e) => setConfig("decision_mode", e.target.value);
+$("voiceSel").onchange = (e) => setConfig("tts_voice", e.target.value);
+$("piChk").onchange = (e) => setConfig("llm_via_pi", e.target.checked);
+$("modelSel").onchange = (e) => pickModel(e.target.value);
+
+/** The user picked a model (click, arrows+Enter, or Enter after typing a fragment). */
+function pickModel(picked) {
+  if (!picked || picked === FILTER_MARK) { applyModelFilter(); return; } // the query line is not a model
+  if (modelQuery) {                      // a pick ends the filter → back to the full list
+    modelQuery = "";
+    applyModelFilter();
+    $("modelSel").value = picked;        // …but the header keeps showing what you picked
+  }
+  if (picked !== currentModel) send({ type: "model", model: picked });
+}
+
+async function start() {
+  try {
+    await setupAudio();
+    $("overlay").style.display = "none";
+  } catch (err) {
+    console.warn(err);
+    $("overlay").style.display = "flex";
+  }
+}
+$("startBtn").onclick = async () => {
+  try { await playCtx?.resume(); await micCtx?.resume(); } catch {}
+  if (!micCtx) await start();
+  if (playCtx && playCtx.state === "running" && micCtx && micCtx.state === "running")
+    $("overlay").style.display = "none";
+};
+
+connect();
+start();
+</script>
+</body>
+</html>

@@ -1,0 +1,39 @@
+# dependencies / build output
+node_modules/
+__pycache__/
+
+# audio.cpp: cloned + compiled on demand by `bun run fetch-and-compile-audio.cpp`
+# (full source clone with its own .git + ~1.2 GB build tree — fetched, never committed)
+vendor/audio.cpp/
+
+# runtime state + personal data — everything private or regeneratable lives in data/
+# (pids, server configs, logs, browser profile, notes, skills, voice, pi/ conversations,
+# stats). data/.gitkeep keeps the folder; its contents are never committed.
+data/*
+!data/.gitkeep
+
+# legacy locations from before the consolidation — keep ignored if they reappear.
+# Anchored to the repo root: a future src/run/, docs/logs/ or tests/*.log must never be
+# silently swallowed (everything private already lives under data/, which is ignored whole).
+/run/
+/logs/
+/stats.json
+/out.json
+/*.log
+
+# downloaded models — scripts/download-models.sh fetches ≈3.3 GiB into models/
+models/
+
+# audio outputs written at the repo root (`bun run start --output-wav out.wav`)
+/*.wav
+
+# local configuration — copy .env.example to .env and edit it
+.env
+.env.local
+.env.*.local
+
+# editors / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/

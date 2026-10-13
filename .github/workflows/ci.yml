@@ -1,0 +1,63 @@
+# Type check + the hermetic test suite on every push/PR.
+#
+# `tests/unit` is deliberately the scope of the default job: those tests are self-contained
+# (mocked llama-server / audio.cpp, temp dirs) and run on a bare checkout. The suites that
+# need the speech models are a separate, opt-in job — see `models` below.
+
+name: ci
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  unit:
+    name: typecheck + unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # strict, no emit — the same gate `bun run test` runs as its pretest
+      - name: Type check
+        run: bun run typecheck
+
+      - name: Unit tests
+        run: bun test tests/unit
+
+  # The end-to-end suites load `models/silero/silero_vad.onnx` (and the audio.cpp servers
+  # for scripts/ui-test.sh), i.e. ~3.3 GiB that a bare checkout does not have. Opt in with
+  # the repository variable WITH_MODELS=true to run them here too:
+  #   Settings → Secrets and variables → Actions → Variables → new: WITH_MODELS = true
+  models:
+    name: model-dependent tests (opt-in)
+    if: ${{ vars.WITH_MODELS == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Cache speech models
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: speech-models-${{ hashFiles('scripts/models-download.ts') }}
+
+      - name: Fetch the speech models (~3.3 GiB, resumable)
+        run: bun run models-download
+
+      - name: WebSocket end-to-end suite
+        run: bun test tests/ws-skills.test.ts
