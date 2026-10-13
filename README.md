@@ -1,15 +1,23 @@
-# Sonia
+# Sonia Personal Assistant
 
 **Sonia** — an LLM + STT + TTS voice assistant that needs **no dedicated GPU** and runs
-in **less than 15 GB of RAM**, entirely on a local box (repo: `fullduplex-assistant`).
+in **less than 15 GB of RAM**, entirely on a local computer.
 Multilingual and full-duplex: the mic stays open while the assistant talks — interrupt
 it (barge-in) and it pauses, resumes or cancels accordingly. It mirrors whichever
 language you speak (English/Italian tested).
+
+<p align="center">
+  <img src="./sonia.png" alt="Sonia web UI: live transcript, timer/watch banner and settings drawer" width="700">
+</p>
 
 Everything is local. The only external piece is an **OpenAI-compatible endpoint** (an
 already-running `llama-server` — which can also be local, but is managed outside this
 project like a runtime dependency). Experimentally and optionally, an existing `pi`
 executable can be used instead of that endpoint (see *AI models used*).
+
+**Contents** — [Features](#main-features) · [Architecture](#architecture) ·
+[Models](#ai-models-used) · [Installation](#installation) · [Security](#security) ·
+[Inspiration](#inspiration) · [License](#license)
 
 ---
 
