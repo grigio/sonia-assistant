@@ -11,6 +11,7 @@
     "start": "bun run scripts/run.ts",
     "stop": "bun run scripts/stop.ts --audio",
     "runtime-check": "bun run scripts/runtime-check.ts",
+    "status": "bun run scripts/status.ts",
     "models-download": "bun run scripts/models-download.ts",
     "fetch-and-compile-audio.cpp": "bun run scripts/fetch-and-compile-audio-cpp.ts",
     "typecheck": "tsc --noEmit",

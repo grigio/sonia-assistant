@@ -157,7 +157,8 @@ bun run start --no-browser # same, print the URL only
 bun run start --cli        # terminal through PipeWire mic/speaker
 bun run start --text       # typed input
 bun run stop --all         # …plus llama-server (the systemd unit)
-bun run stop --status      # what is running right now
+bun run status             # what is running + does it answer (--ui: + the browser-UI suite)
+bun run stop --status      # …the processes table alone
 bun run scripts/stop.ts    # only the harness + its Chromium window
 ```
 
@@ -173,8 +174,10 @@ notes/skills/voice choices and the conversation (`chat.json`).
 bun run test              # unit tests (pretest = tsc --noEmit, strict)
 bun run test:all          # + the WebSocket suite (needs models/silero)
 bun run typecheck
-bun run runtime-check     # are llama-server + ASR + TTS + turn + harness up?
-scripts/ui-test.sh        # browser-UI suite (headless Chromium)
+bun run status            # what is running + are llama-server/ASR/TTS/turn/harness up?
+bun run status --ui       # …+ the browser-UI suite (headless Chromium)
+bun run runtime-check     # the endpoint probe alone (the second half of `status`)
+scripts/ui-test.sh        # the browser-UI suite alone (the `--ui` part)
 ```
 
 CI (`.github/workflows/ci.yml`) is hermetic: llama-server and the audio.cpp servers are

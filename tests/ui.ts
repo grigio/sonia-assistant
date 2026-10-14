@@ -447,7 +447,9 @@ async function testCheck(c: Ctx): Promise<void> {
     "typing into the selector turns it into the query line",
   );
   c.check(
-    String(shown.head).includes("«gemma»") && String(shown.head).includes(`di ${total}`),
+    // whichever language LOCALE gave the page: "«gemma» · 3 di 110" / "· 3 of 110"
+    String(shown.head).includes("«gemma»") &&
+      [`di ${total}`, `of ${total}`].some((w) => String(shown.head).includes(w)),
     "the query line says what you typed and how much it kept",
   );
   c.check(
