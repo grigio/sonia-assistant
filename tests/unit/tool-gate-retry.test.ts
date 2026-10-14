@@ -7,9 +7,15 @@
  * input never changes (temperature 0, same words every round). Six gated rounds, first
  * token at 15.2 s, then an answer about an unrelated topic.
  *
+ * Since then the *reads* (`read_skill`, `list_skills` — `GATE_EXEMPT_TOOLS`) are never
+ * judged at all: they act on nothing, and a denial costs a user round-trip for work the
+ * user did ask for (data/chat.json 372-381: "…Usa la skill." → denied → "Sì, procedi.").
+ * What the judge still decides is the tool that *acts*: `run_command`.
+ *
  * These tests pin the fixed behaviour:
  *
  *   - the judge sees each proposal's *arguments* and the active skill names
+ *   - a read runs without ever reaching the judge (even when everything is denied)
  *   - a call denied once runs when the model proposes it identically again (…↻)
  *   - a different call (other arguments) is denied on its own first appearance
  *   - a refused call is announced as ⛔ blocked, never as "✅ ok" (its result is a
@@ -139,70 +145,133 @@ const skillRound = (): Plan => ({
   calls: [{ name: "read_skill", args: '{"name":"demo"}' }],
 });
 
+/** A command carrying the skill's name in its arguments — what the judge must be shown. */
+const skillScript = (): Plan => ({
+  calls: [{ name: "run_command", args: '{"command":"echo demo surfix"}' }],
+});
+
+/** One call whose arguments are its identity (what the ↻ rule matches on). */
+const run = (line: string): Plan => ({
+  calls: [{ name: "run_command", args: `{"command":"${line}"}` }],
+});
+
 describe("the tool gate — what the judge is shown", () => {
   test("the proposal carries its arguments and the active skill names", async () => {
-    const { a, judges } = scripted([skillRound(), { text: "Va bene." }]);
+    const { a, judges } = scripted([skillScript(), { text: "Va bene." }]);
     a.startResponse("usa demo surfix", Date.now());
     await a.resp?.task;
 
     expect(judges).toHaveLength(1);
-    expect(judges[0]!.proposed[0]!.args).toBe('{"name":"demo"}');
+    expect(judges[0]!.proposed[0]!.args).toBe('{"command":"echo demo surfix"}');
     expect(judges[0]!.skills).toBe("demo");
     expect(judges[0]!.userText).toBe("usa demo surfix");
   });
 });
 
+/**
+ * The reads are context loaders, not actions: judging them blocks work the user asked
+ * for (data/chat.json 372-381 — "…Usa la skill." denied, and one user confirmation later
+ * the identical chain ran anyway). The verdict below denies *everything*, so the
+ * exemption — not a generous judge — is what lets them through.
+ */
+describe("the tool gate — read-only skill tools are never judged", () => {
+  test("read_skill runs with no judge question at all", async () => {
+    const { a, judges, results, logs } = scripted([skillRound(), { text: "Fatto." }]);
+
+    a.startResponse("usa la skill demo", Date.now());
+    await a.resp?.task;
+
+    expect(judges).toHaveLength(0);
+    expect(results[0]).toContain("# Demo");
+    expect(logs.some((l) => l.includes("read-only, not judged"))).toBe(true);
+    expect(logs.some((l) => l.includes("⛔ read_skill"))).toBe(false);
+  });
+
+  test("list_skills too", async () => {
+    const { a, judges, results } = scripted([
+      { calls: [{ name: "list_skills", args: "{}" }] },
+      { text: "Fatto." },
+    ]);
+
+    a.startResponse("quali skill hai", Date.now());
+    await a.resp?.task;
+
+    expect(judges).toHaveLength(0);
+    expect(results[0]).toContain("demo");
+  });
+
+  test("the action built on the read is still judged in the same round", async () => {
+    const { a, judges, results } = scripted([
+      {
+        calls: [
+          { name: "read_skill", args: '{"name":"demo"}' },
+          { name: "run_command", args: '{"command":"echo dopo"}' },
+        ],
+      },
+      { text: "Fatto." },
+    ]);
+
+    a.startResponse("usa la skill demo", Date.now());
+    await a.resp?.task;
+
+    expect(judges).toHaveLength(1); // the read is carried, only run_command is asked about
+    expect(judges[0]!.proposed.map((p) => p.name)).toEqual(["run_command"]);
+    expect(results[0]).toContain("# Demo");           // exempt → it ran…
+    expect(results[1]).toBe(t("it", "gated.tool"));   // …and the denial still stopped the script
+  });
+});
+
 describe("the tool gate — a denied call proposed again", () => {
   test("denied once, run on the identical retry (↻) instead of stalling the turn", async () => {
-    const { a, results, logs } = scripted([skillRound(), skillRound(), skillRound(), { text: "Fatto." }]);
+    const { a, results, logs } = scripted([run("echo primo"), run("echo primo"), run("echo primo"), { text: "Fatto." }]);
 
-    a.startResponse("usa demo surfix", Date.now());
+    a.startResponse("leggi l'ultimo post", Date.now());
     await a.resp?.task;
 
     const gated = t("it", "gated.tool");
     expect(results[0]).toBe(gated);              // round 1: the judge says no
-    expect(results[1]).toContain("# Demo");      // round 2: identical call → it ran
-    expect(results[2]).toContain("already in the messages above"); // …and stayed allowed
-    expect(logs.filter((l) => l.includes("read_skill↻")).length).toBeGreaterThanOrEqual(1);
+    expect(results[1]).toContain("primo");       // round 2: identical call → it ran
+    expect(results[2]).toContain("primo");       // …and stayed allowed
+    expect(logs.filter((l) => l.includes("run_command↻")).length).toBeGreaterThanOrEqual(1);
     expect(a.history.at(-1)!.content).toBe("Fatto."); // the turn still ended on text
   });
 
   test("other arguments are a new call: denied on their own first appearance", async () => {
     const { a, results } = scripted([
-      skillRound(),
-      { calls: [{ name: "read_skill", args: '{"name":"other"}' }] },
-      skillRound(),
+      run("echo primo"),
+      run("echo altro"),
+      run("echo primo"),
       { text: "Fatto." },
     ]);
 
-    a.startResponse("usa demo surfix", Date.now());
+    a.startResponse("leggi l'ultimo post", Date.now());
     await a.resp?.task;
 
     const gated = t("it", "gated.tool");
-    expect(results[0]).toBe(gated);  // "demo" denied → recorded
-    expect(results[1]).toBe(gated);  // "other" ≠ "demo" → denied on its own first time
-    expect(results[2]).toContain("# Demo"); // "demo" again → allowed
+    expect(results[0]).toBe(gated);  // "primo" denied → recorded
+    expect(results[1]).toBe(gated);  // "altro" ≠ "primo" → denied on its own first time
+    expect(results[2]).toContain("primo"); // "primo" again → allowed
   });
 
   test("an allowed call is never recorded nor retried by the rule", async () => {
     const { a, results, logs } = scripted(
-      [skillRound(), skillRound(), { text: "Fatto." }],
+      [run("echo uno"), run("echo uno"), { text: "Fatto." }],
       () => new Set([0]), // the judge always allows
     );
 
-    a.startResponse("usa demo surfix", Date.now());
+    a.startResponse("leggi l'ultimo post", Date.now());
     await a.resp?.task;
 
-    expect(results[0]).toContain("# Demo");  // the judge allows → runs both rounds
-    expect(results[1]).toContain("already in the messages above");
-    expect(logs.some((l) => l.includes("read_skill↻"))).toBe(false);
-    expect(logs.some((l) => l.includes("read_skill✗"))).toBe(false);
+    expect(results[0]).toContain("uno");  // the judge allows → runs both rounds
+    expect(results[1]).toContain("uno");
+    expect(logs.some((l) => l.includes("run_command↻"))).toBe(false);
+    expect(logs.some((l) => l.includes("run_command✗"))).toBe(false);
   });
 
   test("a refused call is ⛔ blocked on the card and in the log, never «✅ ok»", async () => {
-    const { a, payloads, logs } = scripted([skillRound(), { text: "Fatto." }]);
+    const { a, payloads, logs } = scripted([run("echo niente"), { text: "Fatto." }]);
 
-    a.startResponse("usa demo surfix", Date.now());
+    a.startResponse("leggi l'ultimo post", Date.now());
     await a.resp?.task;
 
     const ends = payloads.filter((p) => p.phase === "end");
@@ -210,22 +279,22 @@ describe("the tool gate — a denied call proposed again", () => {
     expect(ends[0]!.blocked).toBe(true);
     expect(ends[0]!.error).toBe(false);   // not an error either: it never ran
     expect(ends[0]!.info).toBe(t("it", "tool.gatedInfo"));
-    expect(logs.some((l) => l.includes("⛔ read_skill"))).toBe(true);
-    expect(logs.some((l) => l.includes("⚙ read_skill"))).toBe(false);
+    expect(logs.some((l) => l.includes("⛔ run_command"))).toBe(true);
+    expect(logs.some((l) => l.includes("⚙ run_command"))).toBe(false);
   });
 
   test("a call that ran keeps «✅ ok»: no blocked flag, no ⛔ in the log", async () => {
     const { a, payloads, logs } = scripted(
-      [skillRound(), { text: "Fatto." }],
+      [run("echo fatto"), { text: "Fatto." }],
       () => new Set([0]),
     );
 
-    a.startResponse("usa demo surfix", Date.now());
+    a.startResponse("leggi l'ultimo post", Date.now());
     await a.resp?.task;
 
     const ends = payloads.filter((p) => p.phase === "end");
     expect(ends[0]!.blocked).toBeUndefined();
-    expect(logs.some((l) => l.includes("⚙ read_skill"))).toBe(true);
+    expect(logs.some((l) => l.includes("⚙ run_command"))).toBe(true);
     expect(logs.some((l) => l.includes("⛔"))).toBe(false);
   });
 });
@@ -266,12 +335,12 @@ describe("the tool gate — one tool, one decision per turn", () => {
     a.startResponse("usa demo e poi stampa", Date.now());
     await a.resp?.task;
 
-    expect(judges).toHaveLength(2);
-    expect(judges[1]!.proposed[0]!.name).toBe("run_command"); // a new tool → asked
+    expect(judges).toHaveLength(1); // read_skill is exempt: only run_command is asked about
+    expect(judges[0]!.proposed[0]!.name).toBe("run_command");
     // …and the judge sees the call that already ran for this very request
-    expect(judges[1]!.doing).toHaveLength(1);
-    expect(judges[1]!.doing[0]).toContain('read_skill {"name":"demo"}');
-    expect(judges[1]!.doing[0]).toContain("# Demo");
+    expect(judges[0]!.doing).toHaveLength(1);
+    expect(judges[0]!.doing[0]).toContain('read_skill {"name":"demo"}');
+    expect(judges[0]!.doing[0]).toContain("# Demo");
     expect(results[1]).toContain("dopo");
   });
 
@@ -288,7 +357,7 @@ describe("the tool gate — one tool, one decision per turn", () => {
     await a.resp?.task;
 
     const gated = t("it", "gated.tool");
-    expect(results[0]).toContain("# Demo");   // read_skill allowed → carried next round
+    expect(results[0]).toContain("# Demo");   // read_skill: exempt → runs without a question
     expect(results[1]).toContain("already in the messages above");
     expect(results[2]).toBe(gated);           // run_command: first appearance, denied
     expect(results[3]).toContain("dopo");     // identical retry → the ↻ rule runs it

@@ -78,8 +78,10 @@ export class Config {
   ttsVoiceDir = "";
   turnUrl = "http://127.0.0.1:8093";
   turnModel = "smart-turn";
-  /** How often those three servers are re-checked, in ms (`src/health.ts`): a dead
-   *  ASR/TTS puts the header orb on `offline`, a dead Smart Turn is only logged.
+  /** How often those servers are re-checked, in ms (`src/health.ts`): a dead ASR, TTS or
+   *  LLM leg puts the header orb on `offline` and logs which one went away, a dead Smart
+   *  Turn is only logged (turn-taking then falls back to the silence gap). The mic source
+   *  is not polled — it signals the same `offline` on its own (`Assistant.setMicDown`).
    *  `0` turns the poller off. */
   healthPollMs = 10_000;
 
@@ -112,7 +114,9 @@ export class Config {
    *  tools the user's latest message actually asks for. A small model offered tools
    *  re-runs the previous turn's tool for any vague follow-up ("prova" after an
    *  interrupted answer → get_datetime), and no wording of the system prompt stops it.
-   *  Judge failures let every call through (never block an action on a hiccup). */
+   *  Judge failures let every call through (never block an action on a hiccup).
+   *  The read-only skill tools (`read_skill`, `list_skills`) are never judged: they load
+   *  context and act on nothing, while the `run_command` using them is gated as usual. */
   toolGate = true;
 
   // ── barge-in / echo handling ──

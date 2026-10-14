@@ -28,8 +28,35 @@ export class Harness extends Assistant {
 
   async runAudio(): Promise<void> {
     this.spawnAnnouncer();
-    for await (const frame of this.mic!.frames()) {
-      await this.processFrame(frame, now());
+    // A dead mic source (pw-record gone, the device unplugged, an ONNX throw) must cost
+    // one line and a backoff, not the process: the loop restarts the source and only a
+    // source that ends *on purpose* (the offline WAV script ran out) shuts it down.
+    let attempt = 0;
+    let healthy = 0;
+    for (;;) {
+      try {
+        for await (const frame of this.mic!.frames()) {
+          if (attempt > 0 && healthy === 0) this.setMicDown(false);
+          healthy += 1;
+          if (attempt > 0 && healthy > 32) attempt = 0; // ~1 s of audio: it really is back
+          try {
+            await this.processFrame(frame, now());
+          } catch (e) {
+            this.log(`[frame] ${e instanceof Error ? e.message : String(e)}`);
+          }
+        }
+        return;
+      } catch (e) {
+        if (this.stopped) return;
+        healthy = 0;
+        attempt += 1;
+        const delay = Math.min(500 * 2 ** (attempt - 1), 10_000);
+        const why = e instanceof Error ? e.message : String(e);
+        this.log(`⚠ mic source failed: ${why} — restarting in ${delay} ms (attempt ${attempt})`);
+        this.setMicDown(true);
+        await sleep(delay);
+        if (this.stopped) return;
+      }
     }
   }
 

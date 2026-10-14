@@ -1,8 +1,9 @@
-# Type check + the hermetic test suite on every push/PR.
+# Type check + the hermetic suites on every push/PR.
 #
-# `tests/unit` is deliberately the scope of the default job: those tests are self-contained
-# (mocked llama-server / audio.cpp, temp dirs) and run on a bare checkout. The suites that
-# need the speech models are a separate, opt-in job — see `models` below.
+# `tests/unit` and `tests/ws-skills.test.ts` are self-contained: llama-server and the three
+# audio.cpp servers are mocked and the state lives in temp dirs. The only real file either
+# reads is `models/silero/silero_vad.onnx` (2.3 MB), fetched with `--only vad` below — the
+# ~3.3 GiB of speech models are a separate, opt-in job (`models`).
 
 name: ci
 
@@ -13,7 +14,7 @@ on:
 
 jobs:
   unit:
-    name: typecheck + unit tests
+    name: typecheck + unit + websocket tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,15 +30,22 @@ jobs:
       - name: Type check
         run: bun run typecheck
 
+      # everything the WebSocket suite loads from disk: one package of the model plan
+      - name: Fetch the VAD model (2.3 MB)
+        run: bun run models-download --only vad
+
       - name: Unit tests
         run: bun test tests/unit
 
-  # The end-to-end suites load `models/silero/silero_vad.onnx` (and the audio.cpp servers
-  # for scripts/ui-test.sh), i.e. ~3.3 GiB that a bare checkout does not have. Opt in with
-  # the repository variable WITH_MODELS=true to run them here too:
+      - name: WebSocket suite (mocked llama-server + audio.cpp)
+        run: bun test tests/ws-skills.test.ts
+
+  # Fetches the full ~3.3 GiB model plan (so a moved/broken mirror is caught here, not on
+  # someone's machine) and re-runs the whole suite with the real files present. Opt in with
+  # the repository variable WITH_MODELS=true:
   #   Settings → Secrets and variables → Actions → Variables → new: WITH_MODELS = true
   models:
-    name: model-dependent tests (opt-in)
+    name: speech models, full suite (opt-in)
     if: ${{ vars.WITH_MODELS == 'true' }}
     runs-on: ubuntu-latest
     steps:
@@ -59,5 +67,5 @@ jobs:
       - name: Fetch the speech models (~3.3 GiB, resumable)
         run: bun run models-download
 
-      - name: WebSocket end-to-end suite
-        run: bun test tests/ws-skills.test.ts
+      - name: Full suite
+        run: bun run test:all

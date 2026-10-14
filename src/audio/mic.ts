@@ -16,10 +16,20 @@ export interface MicSource {
 
 export class PipeWireMic implements MicSource {
   private proc: ChildProcess | null = null;
+  /** Set by `close()`: the stream ending is then the shutdown, not a crash. */
+  private stopping = false;
 
   constructor(private readonly target = "") {}
 
+  /**
+   * The frames of `pw-record`. The stream ending **without** `close()` is a failure —
+   * pw-record died (PipeWire restarted, the device went away, a bad `--target`) or never
+   * started — and is thrown, because `Assistant.runAudio()` restarts the source on a
+   * throw while a *normal* end means "the script ran out" (offline WAV input). Ending
+   * quietly instead is what used to shut the whole harness down with exit code 0.
+   */
   async *frames(): AsyncGenerator<Uint8Array, void, unknown> {
+    if (this.stopping) return; // close() raced the restart: never respawn after shutdown
     const cmd = [
       "pw-record",
       "--rate", String(MIC_RATE),
@@ -29,13 +39,36 @@ export class PipeWireMic implements MicSource {
     ];
     if (this.target) cmd.push("--target", this.target);
     cmd.push("-");
-    const proc = spawn(cmd[0]!, cmd.slice(1), { stdio: ["ignore", "pipe", "ignore"] });
+    const proc = spawn(cmd[0]!, cmd.slice(1), { stdio: ["ignore", "pipe", "pipe"] });
     this.proc = proc;
-    for await (const frame of exactFrames(proc.stdout!, FRAME_BYTES)) yield frame;
+    this.stopping = false;
+    /** pw-record's own complaint (no device, unknown --target …): the tail of its stderr. */
+    let errTail = "";
+    proc.stderr?.on("data", (d: Buffer) => {
+      errTail = (errTail + d.toString("utf-8")).slice(-300);
+    });
+    const spawnErr: { err: Error | null } = { err: null }; // a box: assigned from a callback
+    proc.once("error", (e) => (spawnErr.err = e));
+    try {
+      for await (const frame of exactFrames(proc.stdout!, FRAME_BYTES)) yield frame;
+    } catch (e) {
+      // a spawn failure destroys the stream before it ever produced a byte: say so
+      if (spawnErr.err) throw new Error(`pw-record could not start: ${spawnErr.err.message}`);
+      throw e;
+    } finally {
+      if (this.stopping) return; // close(): the stream ending *is* the shutdown
+    }
+    if (spawnErr.err) throw new Error(`pw-record could not start: ${spawnErr.err.message}`);
+    const { code, signal } = await exitOf(proc);
+    throw new Error(
+      `pw-record exited (${signal ? `signal ${signal}` : `code ${code}`})` +
+        (errTail.trim() ? ` — ${errTail.trim()}` : ""),
+    );
   }
 
   async close(): Promise<void> {
     const p = this.proc;
+    this.stopping = true;
     if (p && p.exitCode === null) {
       p.kill("SIGKILL");
       await new Promise<void>((res) => p.once("close", () => res()));
@@ -123,6 +156,28 @@ export class WavMic implements MicSource {
 }
 
 // ── helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * How a child ended, for the failure line `frames()` throws. A process that closed its
+ * stdout but is still running must not hang the caller: after `waitMs` the answer is
+ * whatever status it has by then (`null` = still alive).
+ */
+export function exitOf(
+  proc: ChildProcess,
+  waitMs = 2000,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  return new Promise((res) => {
+    if (proc.exitCode !== null || proc.signalCode !== null) {
+      res({ code: proc.exitCode, signal: proc.signalCode });
+      return;
+    }
+    const timer = setTimeout(() => res({ code: proc.exitCode, signal: proc.signalCode }), waitMs);
+    proc.once("close", (code, signal) => {
+      clearTimeout(timer);
+      res({ code, signal });
+    });
+  });
+}
 
 /** Yield fixed-size frames from a byte stream (short reads are buffered). */export async function* exactFrames(
   stream: AsyncIterable<Uint8Array>,

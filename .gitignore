@@ -21,7 +21,7 @@ data/*
 /out.json
 /*.log
 
-# downloaded models — scripts/download-models.sh fetches ≈3.3 GiB into models/
+# downloaded models — `bun run models-download` fetches ≈3.3 GiB into models/
 models/
 
 # audio outputs written at the repo root (`bun run start --output-wav out.wav`)

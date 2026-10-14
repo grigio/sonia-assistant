@@ -15,7 +15,8 @@
     "fetch-and-compile-audio.cpp": "bun run scripts/fetch-and-compile-audio-cpp.ts",
     "typecheck": "tsc --noEmit",
     "pretest": "bun run typecheck",
-    "test": "bun test"
+    "test": "bun test tests/unit",
+    "test:all": "bun test"
   },
   "dependencies": {
     "onnxruntime-node": "^1.22.0",

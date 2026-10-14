@@ -16,10 +16,10 @@ import { ToolMarkupFilter } from "../clients/toolmarkup";
 import { toolEnd, toolStart, type ToolPayload } from "../clients/toolcards";
 import { Player } from "../audio/player";
 import type { MicSource } from "../audio/mic";
-import { Tools, argSummary, toolDescription } from "../tools";
+import { GATE_EXEMPT_TOOLS, Tools, argSummary, toolDescription } from "../tools";
 import { Skills, type SkillInfo } from "../skills";
 import { SileroVAD } from "../vad";
-import { healthUrl, probeAll, type Target } from "../health";
+import { healthUrl, llmHealthUrl, probeAll, type Target } from "../health";
 import { SentenceSplitter } from "./sentences";
 import { ChatStore, type RestoredChat } from "./chat-store";
 import { classifyYesNo } from "./text";
@@ -183,10 +183,16 @@ export class Assistant {
   stats: { voice_to_audio_ms: number; voice_to_first_token_ms: number }[] = [];
   emit: (ev: ServerEvent) => void = () => {};
   state: StateName = "listening";
-  /** audio.cpp servers the last liveness round could not reach: `asr` / `tts` / `turn`. */
+  /** audio.cpp servers the last liveness round could not reach: `asr` / `tts` / `turn`
+   *  (plus `llm`, the one leg that is not audio.cpp — see `healthTargets`). */
   private healthDown: string[] = [];
   private healthTimer: ReturnType<typeof setInterval> | null = null;
   private healthBusy = false; // a slow round must never stack on the next tick
+  /** The mic source died (see `Harness.runAudio`): nothing can be heard until it is back,
+   *  so the orb says `offline` instead of sitting on `listening` with a silent input. */
+  protected micDown = false;
+  /** Set by `close()`: what tells a restarting loop and a pending task to give up. */
+  protected stopped = false;
   pendingApproval: PendingApproval | null = null;
   models: string[] = [];
   /** Header context bar: tokens of the last LLM request (prompt + completion) / n_ctx. */
@@ -411,6 +417,7 @@ export class Assistant {
   }
 
   async close(): Promise<void> {
+    this.stopped = true;
     this.stopHealthPoll();
     this.resp?.controller.abort();
     this.utt?.asr.abort();
@@ -441,9 +448,15 @@ export class Assistant {
   }
 
   refreshState(): void {
-    // A dead ASR/TTS outranks everything else: nothing can be transcribed or spoken, so
-    // the honest headline is `offline` whatever the pipeline was doing (health.ts).
-    if (this.healthDown.includes("asr") || this.healthDown.includes("tts")) {
+    // A dead ASR/TTS/LLM (or a dead mic source) outranks everything else: nothing can be
+    // transcribed, answered or spoken, so the honest headline is `offline` whatever the
+    // pipeline was doing (health.ts).
+    if (
+      this.micDown ||
+      this.healthDown.includes("asr") ||
+      this.healthDown.includes("tts") ||
+      this.healthDown.includes("llm")
+    ) {
       this.setState("offline");
     } else if (this.pendingApproval !== null && this.utt === null) this.setState("confirm");
     else if (this.utt !== null) this.setState("user");
@@ -456,12 +469,43 @@ export class Assistant {
 
   // ── audio.cpp liveness (health.ts) ──
 
+  /**
+   * The mic source went away (`pw-record` died, the device was unplugged) and came back.
+   * Down: the orb goes `offline`, the line is said in the chat — and the utterance in
+   * flight is dropped, so a half-heard turn cannot be flushed as a garbage transcript
+   * minutes later when the audio resumes.
+   */
+  setMicDown(down: boolean): void {
+    if (this.micDown === down) return;
+    this.micDown = down;
+    if (down) {
+      this.log("⚠ mic source down — waiting for it to come back");
+      this.emit({ type: "event", text: t(this.cfg.locale, "evt.micDown") });
+      if (this.utt !== null) {
+        this.utt.asr.abort();
+        this.utt = null;
+        this.preroll = [];
+        this.speechRunMs = 0;
+        this.vad?.reset();
+      }
+    } else {
+      this.log("✅ mic source back");
+      this.emit({ type: "event", text: t(this.cfg.locale, "evt.micBack") });
+    }
+    this.refreshState();
+  }
+
   private healthTargets(): Target[] {
-    return [
+    const targets: Target[] = [
       { name: "asr", url: healthUrl(this.cfg.asrUrl) },
       { name: "tts", url: healthUrl(this.cfg.ttsUrl) },
       { name: "turn", url: healthUrl(this.cfg.turnUrl) },
     ];
+    // The LLM leg is liveness-checked too: a dead llama-server used to leave the orb green
+    // and the user with raw `fetch failed` lines. The pi leg is a subprocess — nothing to
+    // probe (and `pi` is only spawned on a turn anyway).
+    if (!this.cfg.llmViaPi) targets.push({ name: "llm", url: llmHealthUrl(this.cfg.llmBaseUrl) });
+    return targets;
   }
 
   /**
@@ -480,11 +524,8 @@ export class Assistant {
       if (wasDown.size === isDown.size && [...wasDown].every((n) => isDown.has(n))) return;
       for (const { name, url } of targets) {
         if (isDown.has(name) === wasDown.has(name)) continue;
-        this.log(
-          isDown.has(name)
-            ? `⚠ audio server down: ${name} ${url}`
-            : `✅ audio server back: ${name} ${url}`,
-        );
+        const what = name === "llm" ? "LLM" : "audio server";
+        this.log(isDown.has(name) ? `⚠ ${what} down: ${name} ${url}` : `✅ ${what} back: ${name} ${url}`);
       }
       this.healthDown = down;
       this.refreshState();
@@ -1270,6 +1311,14 @@ export class Assistant {
    * so a follow-up of the same request — list → open one of the listed items — is
    * recognisable as part of it instead of as the model's own initiative.
    *
+   * Two tools are never asked about at all (`GATE_EXEMPT_TOOLS`): `read_skill` /
+   * `list_skills` only load context, they act on nothing, and the call that uses them
+   * (`run_command`) is gated all the same. The judge is a small model shown a content
+   * request ("quali sono le ultime notizie …") with the skill mention at the end
+   * ("… Usa la skill.") and answers NONE — the read runs, the turn dies anyway, and the
+   * same chain runs one user confirmation later (data/chat.json 372-381). A denial of a
+   * read costs a round-trip and buys nothing.
+   *
    * `null` = no gate: turned off (TOOL_GATE=0), the pi leg (pi executes its own tools),
    * or the judge failed — every call proceeds exactly as before.
    */
@@ -1286,10 +1335,15 @@ export class Assistant {
     // 13:44:28 — and loses the call for good when the model does not repeat it verbatim
     // (the answer that followed at 13:45:01 was invented without the data it asked for).
     const names = calls.map((c) => c.function.name);
-    const carried = calls.map((_, i) => (resp.gateAllowed.has(names[i]!) ? i : -1));
-    const ask = calls.map((_, i) => i).filter((i) => !resp.gateAllowed.has(names[i]!));
+    // exempt (read-only) and already-allowed tools alike: both are carried without a question
+    const ok = (i: number) => resp.gateAllowed.has(names[i]!) || GATE_EXEMPT_TOOLS.has(names[i]!);
+    const carried = calls.map((_, i) => (ok(i) ? i : -1));
+    const ask = calls.map((_, i) => i).filter((i) => !ok(i));
     if (!ask.length) {
-      this.log(`   🛡 tool gate: ${names.join(", ")} ≡ already allowed for this turn`);
+      const tag = names.every((n) => GATE_EXEMPT_TOOLS.has(n))
+        ? "read-only, not judged"
+        : "already allowed for this turn";
+      this.log(`   🛡 tool gate: ${names.join(", ")} ≡ ${tag}`);
       return new Set(calls.map((_, i) => i));
     }
     const prev =

@@ -213,6 +213,20 @@ export function argSummary(raw: string | undefined, max = 160): string {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
+/**
+ * Tools the **tool gate never judges**: they only load context (a SKILL.md, the list of
+ * active skills) and act on nothing — the call that *does* something with them
+ * (`run_command`) is still gated, so the dangerous half of the pair keeps its judge.
+ *
+ * Blocking a read stalls work the user did ask for: data/chat.json 372-381 —
+ * "…Usa la skill." → `read_skill` denied (the judge saw a content request plus a trailing
+ * skill mention and answered NONE), the turn died on a "Sì, procedi.", and the identical
+ * `read_skill` → `run_command` chain ran one confirmation later anyway. A read is cheap
+ * and repeat-safe (`Tools.alreadyInContext` refuses the second one), a denial costs a
+ * whole user round-trip.
+ */
+export const GATE_EXEMPT_TOOLS: ReadonlySet<string> = new Set(["list_skills", "read_skill"]);
+
 /** One-line description of a tool by name — what the tool gate is shown. */
 export function toolDescription(name: string): string {
   type Fn = { function?: { name?: string; description?: string } };

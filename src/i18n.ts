@@ -42,6 +42,9 @@ const it = {
   "evt.backchannel": "assenso",
   "evt.cmdApproved": "✅ comando autorizzato",
   "evt.cmdDenied": "❌ comando rifiutato",
+  /** The mic source died / came back (pw-record gone, device unplugged). */
+  "evt.micDown": "⚠ microfono interrotto: non sento nulla finché non torna",
+  "evt.micBack": "✅ microfono attivo di nuovo",
 
   // ── how an approval was resolved (in parentheses after the line above) ──
   "via.click": "clic",
@@ -166,6 +169,9 @@ const en: Record<keyof typeof it, string> = {
   "evt.backchannel": "backchannel",
   "evt.cmdApproved": "✅ command approved",
   "evt.cmdDenied": "❌ command denied",
+  /** The mic source died / came back (pw-record gone, device unplugged). */
+  "evt.micDown": "⚠ microphone lost: I hear nothing until it is back",
+  "evt.micBack": "✅ microphone back",
 
   "via.click": "click",
   "via.unclear": "unclear reply",
