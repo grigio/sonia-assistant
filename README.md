@@ -11,7 +11,7 @@ language you speak (English/Italian tested).
 </p>
 
 <p align="center">
-  ▶️ <a href="https://www.youtube.com/watch?v=1WmvMO-f-24"><b>Sonia demo video</b></a>
+  ▶️ <a href="https://www.youtube.com/watch?v=OWdT6Ow0MfM"><b>Sonia demo video</b></a>
 </p>
 
 Everything is local; the only external piece is an **OpenAI-compatible endpoint** (an
