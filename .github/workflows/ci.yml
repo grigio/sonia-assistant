@@ -100,8 +100,11 @@ jobs:
           useradd -m builder
           chown -R builder "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          # -d: skip the runtime-dependency check (gtk4, pipewire, wireplumber...) —
+          # nothing in build()/package() needs them, jsGTK only dlopens GTK4 at run time,
+          # and pulling a full PipeWire+GTK4 stack into the container buys nothing here.
           runuser -u builder -- bash -c \
-            "cd '$GITHUB_WORKSPACE/sonia-gtk4/packaging' && makepkg -sf --noconfirm"
+            "cd '$GITHUB_WORKSPACE/sonia-gtk4/packaging' && makepkg -sfd --noconfirm"
 
       - name: Package contents
         run: tar -tvf sonia-gtk4-*.pkg.tar.zst
