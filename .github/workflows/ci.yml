@@ -107,7 +107,7 @@ jobs:
             "cd '$GITHUB_WORKSPACE/sonia-gtk4/packaging' && makepkg -sfd --noconfirm"
 
       - name: Package contents
-        run: tar -tvf sonia-gtk4-*.pkg.tar.zst
+        run: tar -tvf sonia-gtk4/packaging/sonia-gtk4-*.pkg.tar.zst
 
       - name: Attach the package to the release
         uses: softprops/action-gh-release@v2
