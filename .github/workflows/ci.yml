@@ -90,7 +90,7 @@ jobs:
 
       # bun lands in /usr/local so the non-root `builder` user running makepkg can see it too
       - name: Install bun (the runtime, and what the client sources run under)
-        run: BUN_INSTALL=/usr/local curl -fsSL https://bun.sh/install | bash
+        run: curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash
 
       # makepkg refuses to run as root, and container jobs run as root: build as `builder`.
       # The checkout is owned by root, so hand it over too (git needs safe.directory as well).
