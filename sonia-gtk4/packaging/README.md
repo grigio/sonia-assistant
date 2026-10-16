@@ -34,3 +34,24 @@ Config for one user only: `~/.config/sonia-gtk4/env` (same keys, wins over
 The client does **not** start the harness. Run `bun run start`
 in the sonia-assistant repo first, then launch `sonia-gtk4` (or the menu entry).
 (`bun run start` is headless by default; `bun run webui` is the Chromium UI variant.)
+
+## On speakers, enable echo cancellation
+
+Without it the assistant hears its own voice through the mic and cuts itself off
+mid-sentence — the mic leak is read as a barge-in. From the repo:
+
+```sh
+scripts/install-echo-cancel.sh     # systemd --user unit, loads it at every login
+```
+
+and point the client at the resulting devices in `~/.config/sonia-gtk4/env`:
+
+```sh
+MIC_TARGET=fd_ec_source
+SPK_TARGET=fd_ec_sink
+SONIA_AEC=1
+```
+
+Headphones need none of this. The room-noise gate (`SONIA_MIC_HPF`, `SONIA_MIC_GATE`)
+is on by default and usually wants no tuning — raise them only if phantom speech
+comes back.

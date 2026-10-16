@@ -169,6 +169,24 @@ then the harness — which warms up (LLM + TTS rate + ASR Vulkan graph) before p
 lives in `data/` (git-ignored): pid files, server configs, logs, the browser profile,
 notes/skills/voice choices and the conversation (`chat.json`).
 
+### Barge-in on speakers
+
+On laptop speakers the mic hears the assistant's own voice, and the harness reads
+that leak as a real interruption — the reply stops mid-sentence. The cure is
+PipeWire's WebRTC echo canceller, which creates the `fd_ec_source` / `fd_ec_sink`
+devices every client then points at:
+
+```bash
+scripts/install-echo-cancel.sh          # systemd --user unit: loads it at every login
+scripts/echo-cancel.sh on|off           # …or by hand, for this session only
+```
+
+The unit is machine-local (it ExecStarts this checkout's `echo-cancel.sh`), and the
+module lives in your user PipeWire — it is gone after a reboot unless the unit is
+enabled. Headphones need none of this. Clients pick the devices up with
+`MIC_TARGET=fd_ec_source`, `SPK_TARGET=fd_ec_sink`, `SONIA_AEC=1`; the GTK client
+reads them from `~/.config/sonia-gtk4/env`.
+
 ### Development
 
 ```bash
