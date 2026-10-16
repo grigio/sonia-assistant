@@ -1,6 +1,6 @@
 {
   "name": "fullduplex-assistant",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "license": "GPL-3.0-only",
   "type": "module",
   "private": true,
