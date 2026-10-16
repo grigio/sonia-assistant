@@ -101,6 +101,10 @@ const it = {
   "cmd.none": "Nessun comando specificato.",
   "cmd.disabled": "L'esecuzione di comandi è disattivata.",
   "cmd.denied": "L'utente NON ha autorizzato il comando: non è stato eseguito.",
+  /** command-policy rule 4: sensitive paths are refused even in CMD_MODE=auto. */
+  "cmd.sensitive":
+    "Comando rifiutato: tocca percorsi sensibili (.ssh, chiavi, .env) che non vengono mai " +
+    "letti o scritti da soli. Chiedi all'utente di lanciarlo a mano.",
   "cmd.clipped":
     "…[troncato: mancano {n} caratteri nel mezzo — il testo sotto è la FINE dell'output " +
     "originale, non la parte più recente]…",
@@ -157,6 +161,11 @@ const it = {
   "tool.gatedInfo": "denied: not requested",
   "tool.blocked": "⛔ blocked",
   "tool.unknown": "Strumento sconosciuto: {name}",
+  /** The model sent a malformed arguments blob: the code used to answer with an empty
+   *  `args` (and, e.g., a silently invented 60 s "timer"). Say the mistake instead. */
+  "tool.badArgs":
+    "Argomenti non validi per {name}: il JSON è malformato. Riprova con gli argomenti " +
+    "previsti dallo schema della funzione.",
 } as const;
 
 const en: Record<keyof typeof it, string> = {
@@ -184,8 +193,7 @@ const en: Record<keyof typeof it, string> = {
   "via.rewound": "conversation rewound",
 
   "spoken.approveCommand": "May I run the command you see on screen? Say yes or no.",
-  "spoken.noAnswer":
-    "Sorry, I could not put an answer together — could you ask me again?",
+  "spoken.noAnswer": "Sorry, I could not put an answer together — could you ask me again?",
   "announce.timerExpired": "The {label} has expired.",
 
   "hist.interrupted": "[interrupted by the user]",
@@ -216,6 +224,9 @@ const en: Record<keyof typeof it, string> = {
   "cmd.none": "No command given.",
   "cmd.disabled": "Command execution is disabled.",
   "cmd.denied": "The user did NOT authorize the command: it was not run.",
+  "cmd.sensitive":
+    "Refused: this touches sensitive paths (.ssh, keys, .env), never read or written " +
+    "unattended. Ask the user to run it by hand.",
   "cmd.clipped":
     "…[truncated: {n} characters missing from the middle — the text below is the END of " +
     "the original output, not its newest part]…",
@@ -262,9 +273,295 @@ const en: Record<keyof typeof it, string> = {
   "tool.gatedInfo": "denied: not requested",
   "tool.blocked": "⛔ blocked",
   "tool.unknown": "Unknown tool: {name}",
+  "tool.badArgs":
+    "Invalid arguments for {name}: the JSON is malformed. Retry with the fields the " +
+    "function schema expects.",
 };
 
 const CATALOG: Record<Locale, Record<keyof typeof it, string>> = { it, en };
+
+// ── UI strings (the page + the GTK client) ─────────────────────────────────────
+// The strings the *interface chrome* is made of (header, settings drawer, buttons,
+// state words…) — what static/index.html used to carry as its own `UI_STRINGS`, with
+// the `sonia-gtk4/i18n.ts` copy on top. One file now owns them: the server stamps them
+// into the page at `GET /` (`uiStringsJson()` → the `__UI_STRINGS__` placeholder, just
+// like `__LOCALE__`), and `sonia-gtk4/i18n.ts` imports them for its own controls.
+// Same rule as the server's table: `it` is the source, `en` is typed against it, so a
+// key may never exist in one language and not the other.
+
+const uiIt = {
+  "app.title": "Assistente full-duplex",
+  "ui.title": "Assistente vocale",
+  "state.connecting": "connessione…",
+  "state.listening": "in ascolto",
+  "state.user": "stai parlando…",
+  "state.thinking": "sto pensando…",
+  "state.speaking": "sto parlando",
+  "state.confirm": "attendo la tua conferma (sì / no)",
+  "state.paused": "in pausa (mi hai interrotto?)",
+  "state.offline": "offline",
+
+  "ctx.title.short": "ctx: token usati su n_ctx",
+  "ctx.title": "ctx: {used} token usati su {total} ({pct}%)",
+  "hdr.voice.title":
+    "Voce dell'assistente on/off — spegne solo la riproduzione, il microfono resta attivo",
+  "hdr.voice.aria": "Voce dell'assistente on/off",
+  "hdr.refresh.title": "Aggiorna l'elenco dei modelli (pi --list-models)",
+  "hdr.refresh.aria": "Aggiorna elenco modelli",
+  "model.api.title": "Modello LLM (llama-server)",
+  "model.pi.title": "Modello di pi — elenco da `pi --list-models` (PI_MODEL)",
+  "model.aria": "Modello LLM — scrivi una parte del nome per filtrare l'elenco",
+  // gtk-only (the model popover there shows its own counts)
+  "model.pop.title": "{n} modelli disponibili",
+  "model.pop.matches": "modelli su {n}",
+  "model.filter.head": "🔍 «{q}» · {n} di {total}",
+  "model.filter.title": " — filtro «{q}»: {n} di {total} modelli (Backspace corregge, Esc azzera)",
+  "model.list.title": " — {n} modelli, scrivi una parte del nome per filtrare",
+
+  "set.title": "Impostazioni",
+  "set.hint": "ogni scelta è subito attiva, niente da salvare · Esc per chiudere",
+  "set.close": "Chiudi le impostazioni",
+  "set.grp.listen": "ascolto",
+  "set.barge.title": "Se parli sopra l'assistente, questo si ferma e torna ad ascoltare",
+  "set.barge.sub": "mi fermi se parli sopra di me",
+  "set.half.title": "Mentre l'assistente parla il microfono viene ignorato (serve solo senza AEC)",
+  "set.half.sub": "ignora il microfono mentre parlo (niente AEC)",
+  "set.aec.title":
+    "Manda l'audio in riproduzione all'ecocancellatore del browser, così il microfono non raccoglie la voce dell'assistente",
+  "set.aec.sub": "rimanda l'audio in play all'ecocancellatore",
+  "set.grp.voice": "voce",
+  "set.voice.title":
+    "La voce del sintetizzatore: ogni voce è un preset del pacchetto TTS caricato sul server audio (in futuro anche altri pacchetti/lingue)",
+  "set.voice": "sintetizzatore",
+  "set.voice.aria": "Voce dell'assistente (TTS)",
+  "voice.meta": "TTS · {hz} Hz · {n} voci",
+  "set.grp.reply": "risposta",
+  "think.label": "ragionamento",
+  "set.think.title":
+    "Il modello ragiona prima di rispondere: il ragionamento appare nel chat come blocco collassato, non viene mai detto ad alta voce",
+  "set.think.sub": "penso prima di rispondere · 💭 resta collassato sotto la risposta",
+  "set.pi.title":
+    'Risponde il CLI pi (pi -c "…"), con i suoi strumenti e la sua memoria, invece dell\'API OpenAI-compatibile di llama-server',
+  "set.pi.sub":
+    "strumenti, skill e memoria di pi · il modello si sceglie nella tendina in alto e si filtra scrivendoci dentro",
+  "set.grp.cmd": "comandi",
+  "set.cmd.title": "Esecuzione comandi Linux locali",
+  "set.cmd.sub": "quando posso eseguire comandi",
+  "set.turn.title":
+    "Quanto chiedo all'LLM se hai finito di parlare, quando il silenzio da solo non basta",
+  "set.turn": "fine turno",
+  "set.turn.sub": "quanto chiedo all'LLM se hai finito",
+  "opt.ask": "chiedi",
+  "opt.auto": "auto",
+  "opt.off": "off",
+  "opt.always": "sempre",
+  "skills.title":
+    "Skill: pacchetti di istruzioni e script nella cartella delle skill. Solo quelle spuntate entrano nel contesto dell'assistente (li decidi tu, non lui).",
+  "skills.empty.in": "nessuna skill in {dir}",
+  "skills.empty": "nessuna skill trovata",
+
+  "ft.input.ph": "Parla, oppure scrivi qui e premi Invio…",
+  "ft.send.title": "Invia il messaggio",
+  "ft.send.aria": "Invia il messaggio",
+  "ft.mic.title":
+    "Microfono on/off — ferma solo l'ascolto, la voce dell'assistente continua (usala in alto a destra)",
+  "ft.mic.aria": "Microfono on/off",
+  "ft.stop.title": "Ferma l'ascolto e la risposta",
+  "ft.stop.aria": "Ferma",
+  "ft.reset.title": "Cancella la chat e la memoria della conversazione",
+  "ft.reset.aria": "Cancella la chat",
+  "overlay.text": "Serve un clic per attivare audio e microfono.",
+  "overlay.start": "Avvia",
+
+  "msg.cut": "interrotto",
+  "msg.newChat": "Nuova conversazione.",
+  "msg.replaced": "Un'altra finestra ha preso il controllo: ricarica la pagina per riprenderlo.",
+  "msg.ready": "Pronto. Parla pure — puoi interrompermi quando vuoi.",
+  "msg.rew.title": "Riavvolgi la conversazione fin qui — cancella tutto ciò che viene dopo",
+  "msg.rew.aria": "Riavvolgi la conversazione fin qui",
+  "msg.rew.done": "⟲ conversazione riavvolta: {n} messaggi cancellati",
+  "msg.rew.lost":
+    "⟲ checkpoint non trovato: nessuna modifica (ricarica la pagina se la chat è sfasata)",
+  "think.chars": "· {n} car",
+  "cmd.head": "💻 comando",
+  "cmd.wants": "💻 vuole eseguire questo comando:",
+  "cmd.run": "💻 eseguo:",
+  "cmd.runAuto": "💻 eseguo (sola lettura):",
+  "cmd.running": "⏳ in esecuzione…",
+  "cmd.denied": "❌ non eseguito",
+  "cmd.yes": "Esegui",
+  "cmd.no": "Annulla",
+  "cmd.voiceHint": "oppure rispondi a voce «sì» / «no»",
+  "cmd.output": "output ({n} righe)",
+  "cmd.stopped": "⏹ annullato",
+  "tasks.cancel": "Annulla",
+  "tasks.cancelAria": "Annulla «{label}»",
+  // tool-card states stay ENGLISH in every locale: they are internal states, the
+  // same machine-ish words the log uses, not text to translate
+  "tool.running": "⏳ running",
+  "tool.error": "⚠ error",
+  "tool.blocked": "⛔ blocked",
+  "tool.details": "dettagli",
+  "tool.noOutput": "(nessun output)",
+  "ev.latency": "⏱ primo token {a} ms · primo audio {b} ms",
+  "ev.models": "↻ elenco modelli aggiornato: {n} voci",
+  "ev.loading": "⏳ carico il modello {m}…",
+  "ev.ready": "✅ modello {m} pronto ({s} s)",
+  "ev.modelError": "⚠ impossibile caricare {m}: {e}",
+  "audio.direct": "{reason} → uscita audio diretta",
+  "audio.loopOn": "🔈 AEC loopback attivo",
+  "audio.noNet": "rete assente",
+  "audio.offline": "rete assente, AEC loopback non disponibile",
+  "audio.loopFail": "AEC loopback non connesso (rete?)",
+  "audio.loopLost": "connessione AEC loopback persa (rete cambiata?)",
+  "audio.loopNone": "AEC loopback non disponibile",
+} as const;
+
+const uiEn: Record<keyof typeof uiIt, string> = {
+  "app.title": "Sonia Assistant",
+  "ui.title": "Voice assistant",
+  "state.connecting": "connecting…",
+  "state.listening": "listening",
+  "state.user": "you're talking…",
+  "state.thinking": "thinking…",
+  "state.speaking": "speaking",
+  "state.confirm": "waiting for your confirmation (yes / no)",
+  "state.paused": "paused (did you interrupt me?)",
+  "state.offline": "offline",
+
+  "ctx.title.short": "ctx: tokens used of n_ctx",
+  "ctx.title": "ctx: {used} of {total} tokens ({pct}%)",
+  "hdr.voice.title": "Assistant's voice on/off — mutes the playback only, the microphone stays on",
+  "hdr.voice.aria": "Assistant's voice on/off",
+  "hdr.refresh.title": "Refresh the model list (pi --list-models)",
+  "hdr.refresh.aria": "Refresh model list",
+  "model.api.title": "LLM model (llama-server)",
+  "model.pi.title": "pi model — list from `pi --list-models` (PI_MODEL)",
+  "model.aria": "LLM model — type part of the name to filter the list",
+  "model.pop.title": "{n} models available",
+  "model.pop.matches": "models out of {n}",
+  "model.filter.head": "🔍 «{q}» · {n} of {total}",
+  "model.filter.title": " — filter «{q}»: {n} of {total} models (Backspace edits, Esc clears)",
+  "model.list.title": " — {n} models, type part of a name to filter",
+
+  "set.title": "Settings",
+  "set.hint": "every choice applies immediately, nothing to save · Esc closes",
+  "set.close": "Close settings",
+  "set.grp.listen": "listening",
+  "set.barge.title": "If you talk over the assistant, it stops and goes back to listening",
+  "set.barge.sub": "you stop when I talk over you",
+  "set.half.title":
+    "While the assistant speaks the microphone is ignored (only needed without AEC)",
+  "set.half.sub": "ignore the microphone while I speak (no AEC)",
+  "set.aec.title":
+    "Sends the playback audio to the browser's echo canceller, so the microphone never picks up the assistant's voice",
+  "set.aec.sub": "routes the playing audio back to the canceller",
+  "set.grp.voice": "voice",
+  "set.voice.title":
+    "The synthesiser's voice: every voice is a preset of the TTS pack loaded on the audio server (other packs/languages later)",
+  "set.voice": "synthesiser",
+  "set.voice.aria": "Assistant's voice (TTS)",
+  "voice.meta": "TTS · {hz} Hz · {n} voices",
+  "set.grp.reply": "reply",
+  "think.label": "reasoning",
+  "set.think.title":
+    "The model reasons before answering: the reasoning shows in the chat as a collapsed block and is never spoken aloud",
+  "set.think.sub": "I think before answering · 💭 stays collapsed under the answer",
+  "set.pi.title":
+    'The pi CLI answers (pi -c "…"), with its own tools and memory, instead of llama-server\'s OpenAI-compatible API',
+  "set.pi.sub":
+    "pi's tools, skills and memory · pick the model in the dropdown above and filter by typing into it",
+  "set.grp.cmd": "commands",
+  "set.cmd.title": "Local Linux command execution",
+  "set.cmd.sub": "when I may run commands",
+  "set.turn.title":
+    "How often I ask the LLM whether you have finished speaking, when silence alone is not enough",
+  "set.turn": "end of turn",
+  "set.turn.sub": "how often I ask the LLM if you are done",
+  "opt.ask": "ask",
+  "opt.auto": "auto",
+  "opt.off": "off",
+  "opt.always": "always",
+  "skills.title":
+    "Skills: instruction and script packages in the skills folder. Only the ticked ones enter the assistant's context (you decide, not it).",
+  "skills.empty.in": "no skills in {dir}",
+  "skills.empty": "no skills found",
+
+  "ft.input.ph": "Speak, or type here and press Enter…",
+  "ft.send.title": "Send the message",
+  "ft.send.aria": "Send the message",
+  "ft.mic.title":
+    "Microphone on/off — stops the listening only, the assistant's voice keeps going (use the one top-right)",
+  "ft.mic.aria": "Microphone on/off",
+  "ft.stop.title": "Stop listening and answering",
+  "ft.stop.aria": "Stop",
+  "ft.reset.title": "Clear the chat and the conversation memory",
+  "ft.reset.aria": "Clear the chat",
+  "overlay.text": "One click is needed to switch on the audio and the microphone.",
+  "overlay.start": "Start",
+
+  "msg.cut": "interrupted",
+  "msg.newChat": "New conversation.",
+  "msg.replaced": "Another window took control — reload the page to take it back.",
+  "msg.ready": "Ready. Just speak — you can interrupt me whenever you like.",
+  "msg.rew.title": "Rewind the conversation to here — drops everything after it",
+  "msg.rew.aria": "Rewind the conversation to here",
+  "msg.rew.done": "⟲ conversation rewound: {n} messages dropped",
+  "msg.rew.lost":
+    "⟲ checkpoint not found: nothing changed (reload the page if the chat is out of step)",
+  "think.chars": "· {n} chars",
+  "cmd.head": "💻 command",
+  "cmd.wants": "💻 wants to run this command:",
+  "cmd.run": "💻 running:",
+  "cmd.runAuto": "💻 running (read-only):",
+  "cmd.running": "⏳ running…",
+  "cmd.denied": "❌ not run",
+  "cmd.yes": "Run",
+  "cmd.no": "Cancel",
+  "cmd.voiceHint": "or answer by voice «yes» / «no»",
+  "cmd.output": "output ({n} lines)",
+  "cmd.stopped": "⏹ cancelled",
+  "tasks.cancel": "Cancel",
+  "tasks.cancelAria": "Cancel «{label}»",
+  "tool.running": "⏳ running",
+  "tool.error": "⚠ error",
+  "tool.blocked": "⛔ blocked",
+  "tool.details": "details",
+  "tool.noOutput": "(no output)",
+  "ev.latency": "⏱ first token {a} ms · first audio {b} ms",
+  "ev.models": "↻ model list refreshed: {n} entries",
+  "ev.loading": "⏳ loading model {m}…",
+  "ev.ready": "✅ model {m} ready ({s} s)",
+  "ev.modelError": "⚠ cannot load {m}: {e}",
+  "audio.direct": "{reason} → direct audio output",
+  "audio.loopOn": "🔈 AEC loopback active",
+  "audio.noNet": "no network",
+  "audio.offline": "no network, AEC loopback unavailable",
+  "audio.loopFail": "AEC loopback not connected (network?)",
+  "audio.loopLost": "AEC loopback connection lost (network changed?)",
+  "audio.loopNone": "AEC loopback unavailable",
+};
+
+/** The one catalogue the page and the GTK client draw from (stamped in / imported). */
+export const UI_STRINGS: Record<Locale, Record<keyof typeof uiIt, string>> = {
+  it: uiIt,
+  en: uiEn,
+};
+
+/**
+ * `UI_STRINGS` as an injection-ready script value for `index()`: the page says
+ * `const UI_STRINGS = __UI_STRINGS__;` and the server swaps this in. Every `<` is
+ * escaped (`\u003c`) so the JSON can never close the `<script>` element itself, and —
+ * because the stamp order matters (`__UI_STRINGS__` first, `__LOCALE__` second) — the
+ * data must not carry the locale stamp: the catalogue texts guard it loudly.
+ */
+export function uiStringsJson(): string {
+  const json = JSON.stringify(UI_STRINGS).replace(/</g, "\\u003c");
+  if (json.includes("__LOCALE__")) {
+    throw new Error("a UI string carries the literal __LOCALE__ stamp — fix the wording");
+  }
+  return json;
+}
 
 /**
  * `LOCALE` may be written as a POSIX locale (`it_IT.UTF-8`, `en_GB`): the base language
@@ -279,7 +576,11 @@ export function normalizeLocale(raw: string | null | undefined): Locale {
 
 /** The same base-language pick, but `null` when this build does not ship it. */
 export function parseLocale(raw: string | null | undefined): Locale | null {
-  const base = (raw ?? "").trim().toLowerCase().split(/[-_.@]/)[0] ?? "";
+  const base =
+    (raw ?? "")
+      .trim()
+      .toLowerCase()
+      .split(/[-_.@]/)[0] ?? "";
   return (LOCALES as string[]).includes(base) ? (base as Locale) : null;
 }
 
@@ -290,17 +591,86 @@ export function parseLocale(raw: string | null | undefined): Locale | null {
  * are left out of both lists — they would vote twice.
  */
 const IT_MARKERS = new Set([
-  "il", "lo", "la", "gli", "le", "un", "uno", "una", "di", "del", "dello", "della",
-  "dei", "degli", "delle", "che", "per", "tra", "fra", "più", "minuto", "minuti",
-  "secondo", "secondi", "ora", "ore", "ricorda", "ricordami", "sveglia", "svegliami",
-  "poi", "quando", "scade", "scaduto", "scadenza", "favore", "grazie", "ciao",
-  "buongiorno", "buonasera", "puoi", "vorrei", "metti", "imposta",
+  "il",
+  "lo",
+  "la",
+  "gli",
+  "le",
+  "un",
+  "uno",
+  "una",
+  "di",
+  "del",
+  "dello",
+  "della",
+  "dei",
+  "degli",
+  "delle",
+  "che",
+  "per",
+  "tra",
+  "fra",
+  "più",
+  "minuto",
+  "minuti",
+  "secondo",
+  "secondi",
+  "ora",
+  "ore",
+  "ricorda",
+  "ricordami",
+  "sveglia",
+  "svegliami",
+  "poi",
+  "quando",
+  "scade",
+  "scaduto",
+  "scadenza",
+  "favore",
+  "grazie",
+  "ciao",
+  "buongiorno",
+  "buonasera",
+  "puoi",
+  "vorrei",
+  "metti",
+  "imposta",
 ]);
 const EN_MARKERS = new Set([
-  "the", "of", "to", "for", "and", "my", "your", "that", "this", "minute", "minutes",
-  "second", "seconds", "hour", "hours", "remind", "reminder", "wake", "timer", "then",
-  "when", "please", "set", "expires", "expired", "ring", "rings", "alarm", "thanks",
-  "could", "would", "should", "hi", "hello",
+  "the",
+  "of",
+  "to",
+  "for",
+  "and",
+  "my",
+  "your",
+  "that",
+  "this",
+  "minute",
+  "minutes",
+  "second",
+  "seconds",
+  "hour",
+  "hours",
+  "remind",
+  "reminder",
+  "wake",
+  "timer",
+  "then",
+  "when",
+  "please",
+  "set",
+  "expires",
+  "expired",
+  "ring",
+  "rings",
+  "alarm",
+  "thanks",
+  "could",
+  "would",
+  "should",
+  "hi",
+  "hello",
 ]);
 const ACCENTS = /[àèéìòùáíóúâêîôû]/;
 

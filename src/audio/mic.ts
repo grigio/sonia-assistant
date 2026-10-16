@@ -3,9 +3,9 @@
  * browser's WebSocket (web mode) and a WAV file (offline tests).
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
-import { FRAME_BYTES, FRAME_SAMPLES, MIC_RATE, loadWav16kMono } from "./wav";
+import { type ChildProcess, spawn } from "node:child_process";
 import { concatBytes, sleep } from "../util";
+import { FRAME_BYTES, FRAME_SAMPLES, loadWav16kMono, MIC_RATE } from "./wav";
 
 export { FRAME_BYTES, FRAME_SAMPLES, MIC_RATE };
 
@@ -32,10 +32,14 @@ export class PipeWireMic implements MicSource {
     if (this.stopping) return; // close() raced the restart: never respawn after shutdown
     const cmd = [
       "pw-record",
-      "--rate", String(MIC_RATE),
-      "--channels", "1",
-      "--format", "s16",
-      "--latency", "32ms",
+      "--rate",
+      String(MIC_RATE),
+      "--channels",
+      "1",
+      "--format",
+      "s16",
+      "--latency",
+      "32ms",
     ];
     if (this.target) cmd.push("--target", this.target);
     cmd.push("-");
@@ -49,15 +53,18 @@ export class PipeWireMic implements MicSource {
     });
     const spawnErr: { err: Error | null } = { err: null }; // a box: assigned from a callback
     proc.once("error", (e) => (spawnErr.err = e));
+    // NB: no `finally` here on purpose. A `return` inside `finally` also swallows an
+    // exception thrown by the `try`/`catch` — the shutdown case has to be checked where
+    // it happens, so a *real* mic failure is never mistaken for close().
     try {
       for await (const frame of exactFrames(proc.stdout!, FRAME_BYTES)) yield frame;
     } catch (e) {
+      if (this.stopping) return; // close() killed pw-record: the stream ending *is* the shutdown
       // a spawn failure destroys the stream before it ever produced a byte: say so
       if (spawnErr.err) throw new Error(`pw-record could not start: ${spawnErr.err.message}`);
       throw e;
-    } finally {
-      if (this.stopping) return; // close(): the stream ending *is* the shutdown
     }
+    if (this.stopping) return; // ditto, for the frame loop that ended on its own
     if (spawnErr.err) throw new Error(`pw-record could not start: ${spawnErr.err.message}`);
     const { code, signal } = await exitOf(proc);
     throw new Error(
@@ -179,7 +186,7 @@ export function exitOf(
   });
 }
 
-/** Yield fixed-size frames from a byte stream (short reads are buffered). */export async function* exactFrames(
+/** Yield fixed-size frames from a byte stream (short reads are buffered). */ export async function* exactFrames(
   stream: AsyncIterable<Uint8Array>,
   size: number,
 ): AsyncGenerator<Uint8Array, void, unknown> {
@@ -195,4 +202,3 @@ export function exitOf(
     }
   }
 }
-

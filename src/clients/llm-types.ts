@@ -19,7 +19,7 @@ export type ChatMessage = {
 
 /** What `LLM.stream()` yields: one discriminated `{kind, …}` item per stream event. */
 export type StreamItem =
-  | { kind: "reasoning"; text: string }   // thinking: goes to the UI, never to TTS/history
+  | { kind: "reasoning"; text: string } // thinking: goes to the UI, never to TTS/history
   | { kind: "text"; text: string }
   | { kind: "tool"; tool: ToolPayload }
   | { kind: "event"; note: string }

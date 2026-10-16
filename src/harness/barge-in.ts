@@ -22,11 +22,7 @@ export type BargeVerdict = "resume-echo" | "resume-backchannel" | "interrupt";
  * resuming playback or cancelling; anything intelligible that is neither a
  * backchannel nor an echo falls through as an interruption.
  */
-export function bargeVerdict(
-  text: string,
-  spokenJoined: string,
-  cfg: Config,
-): BargeVerdict {
+export function bargeVerdict(text: string, spokenJoined: string, cfg: Config): BargeVerdict {
   const ws = words(text);
   if (!ws.length || isBackchannel(text) || echoRatio(text, spokenJoined) >= cfg.echoOverlap) {
     const what = ws.length && !isBackchannel(text) ? "echo" : "backchannel";

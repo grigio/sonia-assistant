@@ -2,17 +2,14 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  loadWav16kMono,
-  parseWav,
-  pcm16ToWavBytes,
-  resample,
-} from "../../src/audio/wav";
+import { loadWav16kMono, parseWav, pcm16ToWavBytes, resample } from "../../src/audio/wav";
 
 function pcmFromSamples(samples: number[]): Uint8Array {
   const out = new Uint8Array(samples.length * 2);
   const view = new DataView(out.buffer);
-  samples.forEach((s, i) => view.setInt16(i * 2, s, true));
+  samples.forEach((s, i) => {
+    view.setInt16(i * 2, s, true);
+  });
   return out;
 }
 

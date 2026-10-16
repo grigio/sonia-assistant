@@ -24,9 +24,8 @@
  */
 
 import { dlopen, JSCallback } from "bun:ffi";
-
-import { Adjustment, ScrolledWindow } from "@sigmasd/gtk/gtk4";
 import type { Widget } from "@sigmasd/gtk/gtk4";
+import { Adjustment, type ScrolledWindow } from "@sigmasd/gtk/gtk4";
 
 const gtk = dlopen("libgtk-4.so.1", {
   gtk_widget_get_parent: { args: ["ptr"], returns: "ptr" },
@@ -40,11 +39,7 @@ const gtk = dlopen("libgtk-4.so.1", {
     gtk_widget_get_parent: (w: unknown) => unknown;
     gtk_window_set_icon_name: (w: unknown, name: unknown) => void;
     gtk_window_set_default_icon_name: (name: unknown) => void;
-    gtk_style_context_lookup_color: (
-      ctx: unknown,
-      name: unknown,
-      rgba: unknown,
-    ) => number;
+    gtk_style_context_lookup_color: (ctx: unknown, name: unknown, rgba: unknown) => number;
   };
 };
 
@@ -175,7 +170,7 @@ export function themeRgba(w: Widget, name: string): [number, number, number, num
     const rgba = new Float32Array(4);
     const found = gtk.symbols.gtk_style_context_lookup_color(
       ctx.ptr,
-      Buffer.from(name + "\0", "utf8"),
+      Buffer.from(`${name}\0`, "utf8"),
       rgba,
     );
     if (!found) return null;

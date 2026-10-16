@@ -20,7 +20,7 @@ export function sleep(ms: number): Promise<void> {
 
 /** Absolute path of an executable found in `PATH` (executable regular file), or `null`. */
 export function which(name: string): string | null {
-  for (const d of (process.env["PATH"] ?? "").split(":").filter(Boolean)) {
+  for (const d of (process.env.PATH ?? "").split(":").filter(Boolean)) {
     const p = `${d}/${name}`;
     try {
       fs.accessSync(p, fs.constants.X_OK);
@@ -67,4 +67,17 @@ export function appendCapped(cur: string, chunk: string, max: number): string {
   const next = cur + chunk;
   if (next.length <= max) return next;
   return next.slice(next.length - max);
+}
+
+/**
+ * Crash-safe JSON write: the payload goes to `<file>.tmp` in the same directory and one
+ * `rename` swaps it over the target, so a crash mid-write leaves the *previous* file on
+ * disk instead of a torn JSON. The pattern `ChatStore.save` established for `chat.json`;
+ * `notes.json` (tools.ts) and `skills.json` (skills.ts) share the exact failure mode and
+ * the exact need — a half-written store must not take a feature down at next startup.
+ */
+export function writeJsonAtomic(file: string, value: unknown, indent?: string | number): void {
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(value, null, indent));
+  fs.renameSync(tmp, file);
 }

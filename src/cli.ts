@@ -2,11 +2,12 @@
  * `bun run src/cli.ts` — full-duplex Italian voice assistant (Stack A, route R2).
  */
 
-import { parseArgs } from "node:util";
 import fs from "node:fs";
+import { parseArgs } from "node:util";
+import { type MicSource, PipeWireMic, WavMic } from "./audio/mic";
 import { Config } from "./config";
 import { Harness } from "./harness/harness";
-import { PipeWireMic, WavMic, type MicSource } from "./audio/mic";
+import { installCrashGuards } from "./log";
 import { sleep } from "./util";
 
 type CliArgs = {
@@ -40,16 +41,16 @@ export function parseCli(argv: string[]): CliArgs {
     },
   });
   return {
-    web: values["web"]!,
+    web: values.web!,
     noBrowser: values["no-browser"]!,
-    host: values["host"]!,
-    port: parsePort(values["port"]),
-    text: values["text"]!,
+    host: values.host!,
+    port: parsePort(values.port),
+    text: values.text!,
     inputWav: values["input-wav"] as string[],
     outputWav: values["output-wav"] as string | undefined,
     noSpeaker: values["no-speaker"]!,
-    stats: values["stats"] as string | undefined,
-    debug: values["debug"]!,
+    stats: values.stats as string | undefined,
+    debug: values.debug!,
   };
 }
 
@@ -90,6 +91,7 @@ export function parseInputWav(items: string[]): [number, string][] {
 }
 
 export async function amain(argv: string[] = process.argv.slice(2)): Promise<void> {
+  installCrashGuards(); // a stray rejection must cost a log line, not the assistant
   const args = parseCli(argv);
   const cfg = Config.fromEnv();
   cfg.debug = cfg.debug || args.debug;
@@ -108,12 +110,7 @@ export async function amain(argv: string[] = process.argv.slice(2)): Promise<voi
     mic = new PipeWireMic(cfg.micTarget);
   }
 
-  const a = new Harness(
-    cfg,
-    mic,
-    args.noSpeaker ? "null" : "pipewire",
-    args.outputWav ?? null,
-  );
+  const a = new Harness(cfg, mic, args.noSpeaker ? "null" : "pipewire", args.outputWav ?? null);
   await a.start();
   a.log(
     "Ready. " +
@@ -148,10 +145,7 @@ export async function amain(argv: string[] = process.argv.slice(2)): Promise<voi
     console.error("\n[fatal]", e);
   } finally {
     if (args.stats) {
-      fs.writeFileSync(
-        args.stats,
-        JSON.stringify({ turns: a.stats, history: a.history }, null, 1),
-      );
+      fs.writeFileSync(args.stats, JSON.stringify({ turns: a.stats, history: a.history }, null, 1));
     }
     await a.close();
     process.exit(exitCode);

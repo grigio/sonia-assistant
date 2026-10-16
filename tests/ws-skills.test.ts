@@ -36,9 +36,9 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import WebSocket from "ws";
+import { pcm16ToWavBytes } from "../src/audio/wav";
 import { Config } from "../src/config";
 import { WebApp } from "../src/web";
-import { pcm16ToWavBytes } from "../src/audio/wav";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -173,7 +173,7 @@ type Fixture = {
 async function startApp(skillsDir: string, dataDir: string): Promise<Fixture> {
   const mock = await mockModelServer();
   const cfg = Config.fromEnv();
-  cfg.llmBaseUrl = mock.url + "/v1";
+  cfg.llmBaseUrl = `${mock.url}/v1`;
   cfg.asrUrl = mock.url;
   cfg.ttsUrl = mock.url;
   cfg.turnUrl = mock.url;
@@ -269,7 +269,7 @@ describe("skills over /ws (hello → skills_set → skills_refresh)", () => {
     expect(hello.skills.map((s) => s.active)).toEqual([true, false]);
     // the block-scalar description is folded into a single line for the UI tooltip
     expect(hello.skills[1]!.description).toBe("Second skill, wrapped.");
-    expect(hello.config["cmd_mode"]).toBe("auto");
+    expect(hello.config.cmd_mode).toBe("auto");
   });
 
   test("skills_set flips the flags, broadcasts them and persists them", async () => {
@@ -308,7 +308,7 @@ describe("skills over /ws (hello → skills_set → skills_refresh)", () => {
 
   test("hello carries the banner, and a ✕ over /ws empties it", async () => {
     const hello = (await f.events.wait("hello")) as AnyEvent & { tasks: unknown[] };
-    expect(hello.tasks).toEqual([]);          // a fresh page starts with no chip
+    expect(hello.tasks).toEqual([]); // a fresh page starts with no chip
 
     const from = f.events.mark();
     await f.app.assistant.tools.call("set_timer", JSON.stringify({ seconds: 60, label: "caffè" }));
@@ -457,7 +457,7 @@ describe("skills over /ws (hello → skills_set → skills_refresh)", () => {
       evil.once("open", () => done("open"));
       evil.once("close", () => done("close"));
     });
-    expect(outcome).toBe("close");        // destroyed at the upgrade, no hello, no frame
+    expect(outcome).toBe("close"); // destroyed at the upgrade, no hello, no frame
     expect(errors.length).toBeGreaterThan(0);
     // …while this suite's own socket (no Origin header: not a browser) is untouched
     expect(f.ws.readyState).toBe(WebSocket.OPEN);
@@ -578,11 +578,13 @@ describe("the drawer's commands", () => {
     expect(cfg.llmDisableThinking).toBe(false); // the wire carries `thinking`, not its negation
     expect(f.events.all.slice(from).length).toBeGreaterThanOrEqual(0);
 
-    // an enum the server does not know is ignored, not written through
+    // an enum the server does not know degrades the same way a junk CMD_MODE in .env
+    // does: fail-safe default + a warning in the log — never a broken mode the drawer
+    // wrote through and nothing gates
     f.ws.send(JSON.stringify({ type: "config", cmd_mode: "yolo", decision_mode: "nope" }));
     await sleep(150);
-    expect(cfg.cmdMode).toBe("ask");
-    expect(cfg.decisionMode).toBe("always");
+    expect(cfg.cmdMode).toBe("ask"); // junk → "ask" (the safest), not the previous value
+    expect(cfg.decisionMode).toBe("auto"); // junk → the decision fallback ("auto")
   });
 
   test("approve resolves a pending command, and a stale id is refused", async () => {

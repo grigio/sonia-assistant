@@ -15,8 +15,8 @@ import { afterAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Config } from "../../src/config";
 import type { StreamItem } from "../../src/clients/llm";
+import { Config } from "../../src/config";
 import {
   CHARS_PER_TOKEN,
   CTX_ASSUMED_WINDOW,
@@ -38,7 +38,7 @@ describe("historyBudget", () => {
     expect(historyBudget(8192, 4)).toBe((8192 - 4000) * 4);
   });
 
-  test("n_ctx unknown: a conservative window, never \"no limit\"", () => {
+  test('n_ctx unknown: a conservative window, never "no limit"', () => {
     const budget = historyBudget(0, CHARS_PER_TOKEN);
     expect(budget).toBe((CTX_ASSUMED_WINDOW - 4000) * CHARS_PER_TOKEN);
     expect(budget).toBeGreaterThan(0);
@@ -50,7 +50,7 @@ describe("historyBudget", () => {
 describe("estimateCharsPerToken", () => {
   test("measures the ratio of the last request, clamped against one odd turn", () => {
     expect(estimateCharsPerToken(30_000, 10_000)).toBe(3);
-    expect(estimateCharsPerToken(60_000, 10_000)).toBe(6);   // never above
+    expect(estimateCharsPerToken(60_000, 10_000)).toBe(6); // never above
     expect(estimateCharsPerToken(10_000, 10_000)).toBe(1.5); // never below
   });
 
@@ -100,34 +100,35 @@ async function turn(a: Assistant, text: string): Promise<void> {
 describe("fitHistory", () => {
   test("a history bigger than the window loses its oldest turns, never the current one", async () => {
     const a = scripted();
-    a.contextTotal = 8192;                     // budget: (8192-4000) × 3 ≈ 12.6k chars
-    for (let i = 0; i < 10; i++) a.addMessage({ role: "user", content: `turno ${i} ${"x".repeat(3000)}` });
+    a.contextTotal = 8192; // budget: (8192-4000) × 3 ≈ 12.6k chars
+    for (let i = 0; i < 10; i++)
+      a.addMessage({ role: "user", content: `turno ${i} ${"x".repeat(3000)}` });
     expect(a.history).toHaveLength(10);
 
     await turn(a, "adesso");
-    expect(a.history.length).toBeLessThan(10);            // the oldest ones went
+    expect(a.history.length).toBeLessThan(10); // the oldest ones went
     expect(a.history.some((m) => m.content === "adesso")).toBe(true); // never the turn being answered
   });
 
-  test("n_ctx unknown still trims (it used to mean \"grow until the server refuses\")", async () => {
+  test('n_ctx unknown still trims (it used to mean "grow until the server refuses")', async () => {
     const a = scripted();
-    a.contextTotal = 0;                       // no model list ever reported it
+    a.contextTotal = 0; // no model list ever reported it
     for (let i = 0; i < 10; i++)
       a.addMessage({ role: "user", content: `q${i} ${"y".repeat(6000)}` });
 
     await turn(a, "sarà?");
     expect(a.history.length).toBeLessThan(10);
     expect(a.history.some((m) => m.content === "sarà?")).toBe(true);
-    expect(a.history.some((m) => m.content === "q0 " + "y".repeat(6000))).toBe(false); // oldest went
+    expect(a.history.some((m) => m.content === `q0 ${"y".repeat(6000)}`)).toBe(false); // oldest went
   });
 
   test("a history well inside the window is left alone", async () => {
     const a = scripted();
-    a.contextTotal = 32768;                   // budget: (32768-4000) × 3 ≈ 86k chars
+    a.contextTotal = 32768; // budget: (32768-4000) × 3 ≈ 86k chars
     for (let i = 0; i < 5; i++) a.addMessage({ role: "user", content: `turno ${i}` });
 
     await turn(a, "breve");
-    expect(a.history).toHaveLength(7);        // 5 + the question just asked + its answer
+    expect(a.history).toHaveLength(7); // 5 + the question just asked + its answer
     expect(a.history.some((m) => m.content === "turno 0")).toBe(true);
   });
 });

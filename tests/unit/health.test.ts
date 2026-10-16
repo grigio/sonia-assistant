@@ -9,8 +9,8 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { Config } from "../../src/config";
 import type { StateName } from "../../src/events";
-import { healthUrl, llmHealthUrl, probe, probeAll } from "../../src/health";
 import { Assistant } from "../../src/harness/assistant";
+import { healthUrl, llmHealthUrl, probe, probeAll } from "../../src/health";
 
 /** One liveness round, normally scheduled by `startHealthPoll()` every 10 s. */
 async function poll(a: Assistant): Promise<void> {

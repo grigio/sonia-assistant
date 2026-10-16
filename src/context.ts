@@ -29,10 +29,7 @@
  * (`max_tokens` + the reasoning budget), and the result never drops below
  * `CTX_MIN_BUDGET_CHARS` — a floor so a tiny window still keeps the last exchanges.
  */
-export function historyBudget(
-  total: number,
-  charsPerToken: number = CHARS_PER_TOKEN,
-): number {
+export function historyBudget(total: number, charsPerToken: number = CHARS_PER_TOKEN): number {
   const window = total > 0 ? total : CTX_ASSUMED_WINDOW;
   return Math.max(CTX_MIN_BUDGET_CHARS, (window - CTX_RESERVE_TOKENS) * charsPerToken);
 }

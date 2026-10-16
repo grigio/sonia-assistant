@@ -10,15 +10,15 @@ import { afterAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Config } from "../../src/config";
-import { PipeWireMic } from "../../src/audio/mic";
 import type { MicSource } from "../../src/audio/mic";
+import { PipeWireMic } from "../../src/audio/mic";
 import { FRAME_BYTES } from "../../src/audio/wav";
-import { Harness } from "../../src/harness/harness";
+import { Config } from "../../src/config";
 import type { StateName } from "../../src/events";
+import { Harness } from "../../src/harness/harness";
 import { sleep } from "../../src/util";
 
-const REAL_PATH = process.env["PATH"] ?? "";
+const REAL_PATH = process.env.PATH ?? "";
 
 /** A directory with our own `pw-record` in it, put in front of PATH for one test. */
 function fakePwRecord(script: string): string {
@@ -31,16 +31,19 @@ function fakePwRecord(script: string): string {
 
 /** Run `fn` with PATH set to `value`, whatever happens. */
 const withPath = async (value: string, fn: () => Promise<void>): Promise<void> => {
-  process.env["PATH"] = value;
+  process.env.PATH = value;
   try {
     await fn();
   } finally {
-    process.env["PATH"] = REAL_PATH;
+    process.env.PATH = REAL_PATH;
   }
 };
 
 /** Drain `frames()` until it ends or throws. */
-async function drain(mic: PipeWireMic, max = 50): Promise<{ frames: number; error: string | null }> {
+async function drain(
+  mic: PipeWireMic,
+  max = 50,
+): Promise<{ frames: number; error: string | null }> {
   let frames = 0;
   try {
     for await (const _frame of mic.frames()) {
@@ -55,7 +58,7 @@ async function drain(mic: PipeWireMic, max = 50): Promise<{ frames: number; erro
 
 const dirs: string[] = [];
 afterAll(() => {
-  process.env["PATH"] = REAL_PATH;
+  process.env.PATH = REAL_PATH;
   for (const d of dirs) fs.rmSync(d, { recursive: true, force: true });
 });
 
@@ -80,9 +83,7 @@ describe("PipeWireMic: a dead pw-record is a failure, not the end of the stream"
   });
 
   test("close() ends the stream normally — the shutdown must not look like a crash", async () => {
-    const dir = fakePwRecord(
-      'while true; do head -c 2048 /dev/zero; sleep 0.01; done',
-    );
+    const dir = fakePwRecord("while true; do head -c 2048 /dev/zero; sleep 0.01; done");
     dirs.push(dir);
     await withPath(`${dir}:${REAL_PATH}`, async () => {
       const mic = new PipeWireMic();
@@ -102,7 +103,7 @@ describe("PipeWireMic: a dead pw-record is a failure, not the end of the stream"
   }, 15_000);
 
   test("frames() called again after close() never respawns pw-record", async () => {
-    const dir = fakePwRecord('while true; do head -c 2048 /dev/zero; sleep 0.01; done');
+    const dir = fakePwRecord("while true; do head -c 2048 /dev/zero; sleep 0.01; done");
     dirs.push(dir);
     await withPath(`${dir}:${REAL_PATH}`, async () => {
       const mic = new PipeWireMic();
@@ -148,7 +149,9 @@ describe("Harness.runAudio: a dead mic source is restarted, not fatal", () => {
     await h.close();
 
     expect(mic.calls).toBe(2);
-    expect(logs.some((l) => l.includes("mic source failed: boom — restarting in 500 ms (attempt 1)"))).toBe(true);
+    expect(
+      logs.some((l) => l.includes("mic source failed: boom — restarting in 500 ms (attempt 1)")),
+    ).toBe(true);
     expect(logs.some((l) => l.includes("mic source down"))).toBe(true);
     expect(logs.some((l) => l.includes("mic source back"))).toBe(true);
     expect(states).toEqual(["offline", "listening"]);

@@ -1,6 +1,6 @@
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { allowGateRetries, LLM, parseToolGate } from "../../src/clients/llm";
 import { Config } from "../../src/config";
-import { LLM, allowGateRetries, parseToolGate } from "../../src/clients/llm";
 import { argSummary, toolDescription } from "../../src/tools";
 
 /** bun test runs every file in one process: remember the real `fetch` here, so an
@@ -192,7 +192,7 @@ describe("tool gate — judgeTools() routing", () => {
     }
   });
 
-  test("nothing ran yet → no \"already doing\" block", async () => {
+  test('nothing ran yet → no "already doing" block', async () => {
     const m = mockFetch(gate("1"));
     try {
       await new LLM(cfg).judgeTools("G", "", "Che ore sono?", PROPOSED);
@@ -227,7 +227,7 @@ describe("allowGateRetries()", () => {
 
   test("the same call denied again in a later round is allowed (…↻ in the log)", () => {
     const denied = new Map<string, number>();
-    allowGateRetries(new Set(), keys, denied);           // round 1: NONE
+    allowGateRetries(new Set(), keys, denied); // round 1: NONE
     const retry = allowGateRetries(new Set(), keys, denied); // round 2: same proposal
     expect([...retry]).toEqual([0, 1]);
     expect([...retry].every((i) => denied.has(keys[i]!))).toBe(true);
@@ -253,9 +253,7 @@ describe("allowGateRetries()", () => {
 describe("argSummary()", () => {
   test("arguments on one line for the judge", () => {
     expect(argSummary('{"name":"websurfx"}')).toBe('{"name":"websurfx"}');
-    expect(argSummary('{"command": "curl a\n&& grep b"}')).toBe(
-      '{"command": "curl a && grep b"}',
-    );
+    expect(argSummary('{"command": "curl a\n&& grep b"}')).toBe('{"command": "curl a && grep b"}');
   });
 
   test("nothing to show → empty string (no bare {} in front of the judge)", () => {

@@ -6,19 +6,15 @@
  */
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
-import { Config } from "../../src/config";
 import { parseToolGate, verdict } from "../../src/clients/llm";
+import { Config } from "../../src/config";
 
 const cfg = new Config();
 const read = (file: string): string => fs.readFileSync(file, "utf-8");
 
 describe("the prompt files themselves", () => {
   test("all three exist where config says they do, and are not empty", () => {
-    for (const file of [
-      cfg.systemPromptFile,
-      cfg.decisionPromptFile,
-      cfg.toolGatePromptFile,
-    ]) {
+    for (const file of [cfg.systemPromptFile, cfg.decisionPromptFile, cfg.toolGatePromptFile]) {
       const text = read(file);
       expect(text.trim().length).toBeGreaterThan(0);
       expect(text.charCodeAt(0)).not.toBe(0xfeff); // a BOM would end up in the prompt
@@ -49,7 +45,7 @@ describe("prompts/decision.txt ↔ verdict()", () => {
     expect(verdict("RePLY")).toBe("speak");
     expect(verdict("ascolto")).toBe("listen"); // an Italian model answering in Italian
     expect(verdict("rispondo")).toBe("speak");
-    expect(verdict("")).toBe("speak");         // nothing intelligible → keep talking
+    expect(verdict("")).toBe("speak"); // nothing intelligible → keep talking
   });
 
   test("it asks for ONE word: the request is made with max_tokens: 4", () => {

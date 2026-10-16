@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { spawnSync } from "node:child_process";
 /**
  * `bun run status` — one command for the whole picture (README §Development):
  *
@@ -22,7 +23,6 @@
  * passed — so `bun run status && …` works as a gate.
  */
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const BUN = process.execPath; // the interpreter running us runs the scripts too
@@ -63,12 +63,20 @@ for (let i = 0; i < argv.length; i++) {
 }
 
 // ── the two read-only sections, always ───────────────────────────────────────
-let failed = run("processes — what is running", [BUN, path.join(ROOT, "scripts/stop.ts"), "--status"]);
+let failed = run("processes — what is running", [
+  BUN,
+  path.join(ROOT, "scripts/stop.ts"),
+  "--status",
+]);
 failed |= run("endpoints — do they answer", [BUN, path.join(ROOT, "scripts/runtime-check.ts")]);
 
 // ── the browser-UI suite, on request ─────────────────────────────────────────
 if (ui) {
-  failed |= run("browser UI — scripts/ui-test.sh", ["bash", path.join(ROOT, "scripts/ui-test.sh"), ...uiTests]);
+  failed |= run("browser UI — scripts/ui-test.sh", [
+    "bash",
+    path.join(ROOT, "scripts/ui-test.sh"),
+    ...uiTests,
+  ]);
 } else {
   console.log(dim(`\n(use --ui to also run the browser-UI suite: bun run status --ui [test…])`));
 }

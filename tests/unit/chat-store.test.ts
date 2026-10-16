@@ -12,10 +12,10 @@ import { afterAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Config } from "../../src/config";
 import type { ChatMessage, StreamItem } from "../../src/clients/llm";
-import { ChatStore, pruneOrphans } from "../../src/harness/chat-store";
+import { Config } from "../../src/config";
 import { Assistant } from "../../src/harness/assistant";
+import { ChatStore, pruneOrphans } from "../../src/harness/chat-store";
 import { Tools } from "../../src/tools";
 
 const dirs: string[] = [];
@@ -31,9 +31,14 @@ afterAll(() => {
 const storeIn = (dir: string) => new ChatStore(path.join(dir, "chat.json"));
 
 /** A stamped history: the ids the Assistant would have given it. */
-function stamped(msgs: ChatMessage[]): { history: ChatMessage[]; ids: WeakMap<ChatMessage, number> } {
+function stamped(msgs: ChatMessage[]): {
+  history: ChatMessage[];
+  ids: WeakMap<ChatMessage, number>;
+} {
   const ids = new WeakMap<ChatMessage, number>();
-  msgs.forEach((m, i) => ids.set(m, i + 1));
+  msgs.forEach((m, i) => {
+    ids.set(m, i + 1);
+  });
   return { history: msgs, ids };
 }
 
@@ -88,15 +93,24 @@ describe("ChatStore", () => {
     fs.writeFileSync(path.join(dir, "chat.json"), JSON.stringify({ v: 1, entries: "nope" }));
     expect(storeIn(dir).load()).toBeNull();
 
-    fs.writeFileSync(path.join(dir, "chat.json"), JSON.stringify({ v: 1, entries: [{ id: 3, msg: { role: "nonsense", content: 42 } }] }));
+    fs.writeFileSync(
+      path.join(dir, "chat.json"),
+      JSON.stringify({ v: 1, entries: [{ id: 3, msg: { role: "nonsense", content: 42 } }] }),
+    );
     expect(storeIn(dir).load()).toBeNull();
   });
 
   test("a tool result whose call was lost goes with it", () => {
     const kept = pruneOrphans([
       { role: "user", content: "leggi" },
-      { role: "tool", tool_call_id: "c1", content: "orphan" },   // no call in front of it
-      { role: "assistant", content: null, tool_calls: [{ id: "c2", type: "function", function: { name: "read_skill", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "c1", content: "orphan" }, // no call in front of it
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          { id: "c2", type: "function", function: { name: "read_skill", arguments: "{}" } },
+        ],
+      },
       { role: "tool", tool_call_id: "c9", content: "of another call" },
       { role: "tool", tool_call_id: "c2", content: "the real answer" },
       { role: "assistant", content: "ecco" },
@@ -150,7 +164,7 @@ describe("the conversation survives a restart", () => {
     };
 
     const first = mk();
-    first.restoreChat();                 // what start() does — and what arms the store
+    first.restoreChat(); // what start() does — and what arms the store
     expect(first.chatLines()).toEqual([]); // nothing to restore yet
     await turn(first, "prima");
     await turn(first, "seconda");
@@ -186,7 +200,9 @@ describe("the conversation survives a restart", () => {
     expect(a.chatLines()).toHaveLength(2);
 
     a.resetConversation();
-    expect(JSON.parse(fs.readFileSync(path.join(dataDir, "chat.json"), "utf-8")).entries).toEqual([]);
+    expect(JSON.parse(fs.readFileSync(path.join(dataDir, "chat.json"), "utf-8")).entries).toEqual(
+      [],
+    );
 
     const b = mk();
     b.restoreChat();
@@ -202,6 +218,6 @@ describe("the conversation survives a restart", () => {
     a.restoreChat();
     await turn(a, "non salvarmi");
     expect(fs.existsSync(path.join(dataDir, "chat.json"))).toBe(false);
-    expect(scripted(cfg).chatLines()).toEqual([]);   // no restore either
+    expect(scripted(cfg).chatLines()).toEqual([]); // no restore either
   });
 });

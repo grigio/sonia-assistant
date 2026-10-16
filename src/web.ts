@@ -8,19 +8,19 @@
  *   browser ──(text: {"type":"text"|"reset"|"config"|…})──► /ws ──► commands
  */
 
+import { spawn } from "node:child_process";
 import crypto from "node:crypto";
-import fs from "node:fs";
+import fs, { promises as fsp } from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
-import { spawn } from "node:child_process";
-import { WebSocketServer, type WebSocket } from "ws";
-import { Config, ROOT } from "./config";
-import type { ClientCommand, ServerEvent } from "./events";
-import { t } from "./i18n";
+import { type WebSocket, WebSocketServer } from "ws";
 import { QueueMic } from "./audio/mic";
+import { type Config, normalizeCmdMode, normalizeDecisionMode, ROOT } from "./config";
+import type { ClientCommand, ServerEvent } from "./events";
 import { Harness } from "./harness/harness";
 import { now } from "./harness/queues";
+import { type Locale, t, uiStringsJson } from "./i18n";
 import { which } from "./util";
 
 const STATIC_DIR = path.join(ROOT, "static");
@@ -99,7 +99,7 @@ export function originAllowed(
   hostHeader: string | undefined,
   bindHost: string,
 ): boolean {
-  if (origin === undefined || origin === "") return true;   // rule 1
+  if (origin === undefined || origin === "") return true; // rule 1
   let u: URL;
   try {
     u = new URL(origin);
@@ -108,18 +108,18 @@ export function originAllowed(
   }
   if (u.protocol !== "http:" && u.protocol !== "https:") return false;
   const host = String(hostHeader ?? "");
-  if (!host || u.host !== host) return false;               // rule 2 (host includes the port)
+  if (!host || u.host !== host) return false; // rule 2 (host includes the port)
 
   let name: string;
   try {
-    name = new URL(`http://${host}`).hostname;              // "127.0.0.1:8095" → "127.0.0.1"
+    name = new URL(`http://${host}`).hostname; // "127.0.0.1:8095" → "127.0.0.1"
   } catch {
     return false;
   }
   // WHATWG URLs keep the brackets on an IPv6 literal (`[::1]`); `--host` may be written
   // either way, so compare the bare address
   const bare = name.startsWith("[") && name.endsWith("]") ? name.slice(1, -1) : name;
-  if (bare === "localhost" || bare === "::1" || bare === "127.0.0.1") return true;   // rule 3
+  if (bare === "localhost" || bare === "::1" || bare === "127.0.0.1") return true; // rule 3
   const bind = String(bindHost ?? "").trim();
   const bindBare = bind.startsWith("[") && bind.endsWith("]") ? bind.slice(1, -1) : bind;
   if (bindBare === bare) return true;
@@ -133,11 +133,6 @@ export function modelLabel(cfg: Config): string {
 }
 
 /** Tag stamped into the served page; it reloads itself when this changes. */
-function uiVersion(): string {
-  const bytes = fs.readFileSync(path.join(STATIC_DIR, "index.html"));
-  return crypto.createHash("sha1").update(bytes).digest("hex").slice(0, 10);
-}
-
 export class WebApp {
   readonly mic = new QueueMic();
   readonly assistant: Harness;
@@ -146,6 +141,14 @@ export class WebApp {
   private server: http.Server | null = null;
   private wss: WebSocketServer | null = null;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
+  /** The heartbeat's "I heard back" set: connect adds the socket, each pong re-adds it,
+   *  each sweep takes it out and pings — a socket missing twice in a row is dead. */
+  private alive = new WeakSet<WebSocket>();
+  /** One stamped page per locale, keyed by static/index.html's mtime: `GET /` only
+   *  re-reads and re-stamps when the source file itself changes, not on every load. */
+  private pages = new Map<Locale, { mtimeMs: number; html: string }>();
+  /** The other `static/` files, same idea, capped (FIFO) so it can never grow wild. */
+  private files = new Map<string, { mtimeMs: number; body: Buffer; type: string }>();
 
   constructor(
     readonly cfg: Config,
@@ -173,58 +176,98 @@ export class WebApp {
 
   // ── handlers ──
 
-  private index(_req: http.IncomingMessage, res: http.ServerResponse): void {
-    const html = fs
-      .readFileSync(path.join(STATIC_DIR, "index.html"), "utf-8")
-      .replace("<!--UIVER-->", uiVersion())
-      // the page's language: `lang="__LOCALE__"` and the UI's own catalogue (both in
-      // index.html) are stamped with LOCALE, so the browser paints the right language
-      .replaceAll("__LOCALE__", this.cfg.locale);
-    res.writeHead(200, {
-      "Content-Type": "text/html; charset=utf-8",
-      "Cache-Control": "no-store",
-    });
-    res.end(html);
+  /** `GET /` — the stamped page. Async so a slow or missing file can only fail this one
+   *  request, never the process; failures answer 500 (the page is not optional anywhere
+   *  else in the app, so there is nothing sensible to fall back to). */
+  private async index(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    try {
+      const html = await this.indexHtml();
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+      res.end(html);
+    } catch (e) {
+      this.assistant.log(`[page] ${e}`);
+      res.writeHead(500).end();
+    }
   }
 
   /**
-   * `GET /static/<path>`: boundary-checked (`resolveStatic`), a real file only (a
-   * directory would throw EISDIR out of `readFileSync` and take the process with it),
-   * and always with a `Content-Type`.
+   * The stamping order matters (the page resolves `UI_STRINGS["__LOCALE__"]` after the
+   * swap): the catalogue goes in first, then the `<!--UIVER-->` tag — still a hash of
+   * the *raw* file, so it stays a cache-buster for the source — and `__LOCALE__` last.
    */
-  private serveStatic(url: string, res: http.ServerResponse): void {
+  private async indexHtml(): Promise<string> {
+    const locale = this.cfg.locale;
+    const mtimeMs = (await fsp.stat(path.join(STATIC_DIR, "index.html"))).mtimeMs;
+    const hit = this.pages.get(locale);
+    if (hit && hit.mtimeMs === mtimeMs) return hit.html;
+    const raw = await fsp.readFile(path.join(STATIC_DIR, "index.html"), "utf-8");
+    // a function replacement, not a string: the catalogue text may contain `$` and `$&`
+    // has meaning in a string replacement
+    const html = raw
+      .replace("__UI_STRINGS__", () => uiStringsJson())
+      .replace("<!--UIVER-->", () =>
+        crypto.createHash("sha1").update(raw).digest("hex").slice(0, 10),
+      )
+      // the page's language: `lang="__LOCALE__"` and `UI_STRINGS["__LOCALE__"]` are both
+      // stamped, so the browser paints the right language; the unstamped file reads
+      // `hasOwn(UI_STRINGS, "__LOCALE__")` → false → stays Italian as a safe default
+      .replaceAll("__LOCALE__", locale);
+    this.pages.set(locale, { mtimeMs, html });
+    return html;
+  }
+
+  /**
+   * `GET /static/<path>`: boundary-checked (`resolveStatic`), a real file only, and
+   * always with a `Content-Type` (table in MIME_TYPES — no sniffing on the way out).
+   * Reads through a small mtime-keyed cache; any miss (no file, a directory, unreadable)
+   * answers 404 — there is nothing to send either way.
+   */
+  private async serveStatic(url: string, res: http.ServerResponse): Promise<void> {
     const file = resolveStatic(url.slice("/static/".length));
     if (file === null) {
       res.writeHead(400).end();
       return;
     }
-    let stat: fs.Stats;
     try {
-      stat = fs.statSync(file);
+      const stat = await fsp.stat(file);
+      if (!stat.isFile()) {
+        res.writeHead(404).end();
+        return;
+      }
+      let body: Buffer;
+      let type: string;
+      const hit = this.files.get(file);
+      if (hit && hit.mtimeMs === stat.mtimeMs) {
+        body = hit.body;
+        type = hit.type;
+      } else {
+        body = await fsp.readFile(file);
+        type = contentTypeFor(file);
+        if (this.files.size >= 16) {
+          const oldest = this.files.keys().next().value;
+          if (oldest !== undefined) this.files.delete(oldest);
+        }
+        this.files.set(file, { mtimeMs: stat.mtimeMs, body, type });
+      }
+      res.writeHead(200, {
+        "Content-Type": type,
+        "Content-Length": body.length,
+        "Cache-Control": "no-store",
+      });
+      res.end(body);
     } catch {
       res.writeHead(404).end();
-      return;
     }
-    if (!stat.isFile()) {
-      res.writeHead(404).end();
-      return;
-    }
-    let body: Buffer;
-    try {
-      body = fs.readFileSync(file);
-    } catch {
-      res.writeHead(500).end();
-      return;
-    }
-    res.writeHead(200, {
-      "Content-Type": contentTypeFor(file),
-      "Content-Length": body.length,
-      "Cache-Control": "no-store",
-    });
-    res.end(body);
   }
 
-  private onUpgrade(req: http.IncomingMessage, socket: import("node:stream").Duplex, head: Buffer): void {
+  private onUpgrade(
+    req: http.IncomingMessage,
+    socket: import("node:stream").Duplex,
+    head: Buffer,
+  ): void {
     const url = (req.url ?? "").split("?")[0];
     if (url !== "/ws") {
       socket.destroy();
@@ -255,6 +298,9 @@ export class WebApp {
       }
     }
     this.ws = ws;
+    // answers the first sweep's ping for sure; from then on only pongs keep it alive
+    this.alive.add(ws);
+    ws.on("pong", () => this.alive.add(ws));
     const a = this.assistant;
     a.stopActivity();
 
@@ -381,7 +427,7 @@ export class WebApp {
         a.setActiveSkills(Array.isArray(cmd.active) ? cmd.active.map(String) : []);
         return;
       case "task_cancel":
-        a.cancelTask(String(cmd.id ?? ""));   // unknown id → nothing announced
+        a.cancelTask(String(cmd.id ?? "")); // unknown id → nothing announced
         return;
       case "config":
         this.applySettings(cmd);
@@ -395,12 +441,16 @@ export class WebApp {
     const cfg = this.cfg;
     if (typeof cmd.half_duplex === "boolean") cfg.halfDuplex = cmd.half_duplex;
     if (typeof cmd.barge_in === "boolean") cfg.bargeIn = cmd.barge_in;
-    if (cmd.decision_mode === "off" || cmd.decision_mode === "auto" || cmd.decision_mode === "always") {
-      cfg.decisionMode = cmd.decision_mode;
+    if (typeof cmd.decision_mode === "string") {
+      // the shared normalizers, not bare literal comparisons: a hand-crafted ws message
+      // with junk here must degrade exactly the way a junk CMD_MODE in .env does —
+      // fail-safe default + a warning in the log
+      cfg.decisionMode = normalizeDecisionMode(cmd.decision_mode);
     }
-    if (cmd.cmd_mode === "off" || cmd.cmd_mode === "ask" || cmd.cmd_mode === "auto") {
-      cfg.cmdMode = cmd.cmd_mode;
-      a.tools.cmdMode = cmd.cmd_mode;
+    if (typeof cmd.cmd_mode === "string") {
+      const mode = normalizeCmdMode(cmd.cmd_mode);
+      cfg.cmdMode = mode;
+      a.tools.cmdMode = mode;
     }
     if (typeof cmd.llm_via_pi === "boolean" && cmd.llm_via_pi !== cfg.llmViaPi) {
       cfg.llmViaPi = cmd.llm_via_pi;
@@ -466,21 +516,37 @@ export class WebApp {
       noServer: true,
       maxPayload: 4 * 1024 * 1024,
     });
+    // Heartbeat: a ping every 20 s; a socket that failed to answer the previous one is
+    // `terminate()`d. Without this sweep a half-dead page (suspended laptop, dropped
+    // wifi, sleep) keeps its slot in this single-connection server forever: the user
+    // would look at a silently dead UI with no way back but a reload + a fresh tab.
     this.heartbeat = setInterval(() => {
       const ws = this.ws;
-      if (ws && ws.readyState === ws.OPEN) {
+      if (!ws || ws.readyState !== ws.OPEN) return;
+      if (!this.alive.has(ws)) {
+        a.log("🌐 browser unresponsive — its socket is dead, dropping it");
         try {
-          ws.ping();
+          ws.terminate();
         } catch {
           /* ignore */
         }
+        return;
+      }
+      this.alive.delete(ws); // answered → only the coming pong may put it back
+      try {
+        ws.ping();
+      } catch {
+        /* ignore */
       }
     }, 20_000);
 
     this.server = http.createServer((req, res) => {
       const url = (req.url ?? "").split("?")[0] ?? "";
-      if (url === "/") this.index(req, res);
-      else if (url.startsWith("/static/")) this.serveStatic(url, res);
+      // async handlers catch their own failures, so nothing escapes; the `.catch` is
+      // only for a fault in the failure path itself (a throw after the header went out)
+      if (url === "/") void this.index(req, res).catch((e) => a.log(`[http] ${e}`));
+      else if (url.startsWith("/static/"))
+        void this.serveStatic(url, res).catch((e) => a.log(`[http] ${e}`));
       else res.writeHead(404).end();
     });
     this.server.on("upgrade", (req, socket, head) => this.onUpgrade(req, socket, head));
@@ -533,10 +599,10 @@ export function pregrantMic(profile: string, url: string): void {
   } catch {
     prefs = {};
   }
-  const exc = (prefs["profile"] ??= {})["content_settings"] ??= {};
-  const exceptions = (exc["exceptions"] ??= {});
-  (exceptions["media_stream_mic"] ??= {})[origin] = { setting: 1 };
-  (prefs["translate"] ??= {})["enabled"] = false;
+  const exc = ((prefs.profile ??= {}).content_settings ??= {});
+  const exceptions = (exc.exceptions ??= {});
+  (exceptions.media_stream_mic ??= {})[origin] = { setting: 1 };
+  (prefs.translate ??= {}).enabled = false;
   fs.writeFileSync(prefsPath, JSON.stringify(prefs));
 }
 
@@ -568,4 +634,3 @@ export function launchChromium(url: string): void {
   );
   child.unref();
 }
-

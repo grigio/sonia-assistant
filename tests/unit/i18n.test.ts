@@ -1,12 +1,14 @@
 /**
- * The two catalogues behind `LOCALE` (.env → src/config.ts):
+ * The catalogue behind `LOCALE` (.env → src/config.ts):
  *
  *   - `normalizeLocale` accepts how people actually write a locale (`it`, `IT`,
  *     `it_IT.UTF-8`, `en_GB`) and refuses everything this build does not ship;
  *   - `t()` fills `{placeholders}` and leaves an unknown one visible instead of
  *     swallowing it;
  *   - both shipped languages carry the same keys (typed at compile time — this test
- *     pins the runtime half of it: no key may render as `some.key`).
+ *     pins the runtime half of it: no key may render as `some.key`);
+ *   - the page no longer has its own catalogue: `static/index.html` carries a marker
+ *     the server replaces with `uiStringsJson()` at `GET /` — the same single source.
  */
 import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
@@ -14,12 +16,14 @@ import path from "node:path";
 import { Config, ROOT } from "../../src/config";
 import {
   DEFAULT_LOCALE,
-  LOCALES,
   detectLocale,
   intlLocale,
+  LOCALES,
   normalizeLocale,
   parseLocale,
   t,
+  UI_STRINGS,
+  uiStringsJson,
 } from "../../src/i18n";
 
 /** Every key the server side ships, one per message the user can end up reading. */
@@ -40,6 +44,7 @@ const SAMPLE_KEYS = [
   "role.assistant",
   "cmd.none",
   "cmd.denied",
+  "cmd.sensitive",
   "cmd.timeout",
   "date.full",
   "timer.set",
@@ -48,6 +53,7 @@ const SAMPLE_KEYS = [
   "tool.truncated",
   "tool.gatedInfo",
   "tool.unknown",
+  "tool.badArgs",
 ] as const;
 
 describe("normalizeLocale", () => {
@@ -151,64 +157,72 @@ describe("t()", () => {
 
 describe("Config.locale", () => {
   test("LOCALE is a normal env knob of Config.fromEnv", () => {
-    const prev = process.env["LOCALE"];
+    const prev = process.env.LOCALE;
     try {
-      process.env["LOCALE"] = "en";
+      process.env.LOCALE = "en";
       expect(Config.fromEnv().locale).toBe("en");
-      process.env["LOCALE"] = "it_IT.UTF-8";
+      process.env.LOCALE = "it_IT.UTF-8";
       expect(Config.fromEnv().locale).toBe("it");
-      process.env["LOCALE"] = "xx_YY";
+      process.env.LOCALE = "xx_YY";
       expect(Config.fromEnv().locale).toBe("en");
-      delete process.env["LOCALE"];
+      delete process.env.LOCALE;
       expect(Config.fromEnv().locale).toBe("it");
     } finally {
-      if (prev === undefined) delete process.env["LOCALE"];
-      else process.env["LOCALE"] = prev;
+      if (prev === undefined) delete process.env.LOCALE;
+      else process.env.LOCALE = prev;
     }
   });
 });
 
-// ── the page's own catalogue (static/index.html runs before the WebSocket exists) ──
+// ── the page's catalogue now travels through the server (single source) ────────
 
-describe("UI_STRINGS in static/index.html", () => {
+describe("UI_STRINGS is stamped into the page at GET /", () => {
   const html = fs.readFileSync(path.join(ROOT, "static", "index.html"), "utf-8");
 
-  /** The `const UI_STRINGS = {…};` literal, evaluated on its own. */
-  const page = ((): Record<string, Record<string, string>> => {
-    const start = html.indexOf("const UI_STRINGS = {");
-    expect(start).toBeGreaterThan(-1);
-    const end = html.indexOf("\n};", start);
-    expect(end).toBeGreaterThan(start);
-    const literal = html.slice(start + "const UI_STRINGS =".length, end + 2).trim();
-    return new Function(`return (${literal})`)() as Record<string, Record<string, string>>;
-  })();
-
-  test("the server can stamp a locale into the page", () => {
+  test("the raw file carries the marker — and no literal catalogue any more", () => {
+    expect(html).toContain("const UI_STRINGS = __UI_STRINGS__; // ← src/i18n.ts, stamped in");
+    expect(html).not.toMatch(/const UI_STRINGS = \{/);
     expect(html).toContain('lang="__LOCALE__"');
-    expect(html).toContain('Object.hasOwn(UI_STRINGS, "__LOCALE__")');
+    expect(html).toContain('Object.hasOwn(UI_STRINGS, "__LOCALE__")'); // own-unstamped → Italian
   });
 
-  test("it and en carry exactly the same keys", () => {
-    const it = Object.keys(page["it"] ?? {}).sort();
-    const en = Object.keys(page["en"] ?? {}).sort();
+  test("uiStringsJson() is injection-safe and carries the catalogue verbatim", () => {
+    const json = uiStringsJson();
+    // the page evaluates it inside a <script>: the *value* must never close that tag
+    expect(json).not.toContain("<");
+    // the stamp order in web.ts is __UI_STRINGS__ → <!--UIVER--> → __LOCALE__; the data
+    // must not carry the locale stamp or the last replace would eat its own marker
+    expect(json).not.toContain("__LOCALE__");
+    const parsed = JSON.parse(json) as Record<string, Record<string, string>>;
+    expect(parsed.it).toBeDefined(); // the stamped page's `it` table
+    expect(parsed.en).toBeDefined();
+    const itS = UI_STRINGS.it as unknown as Record<string, string>;
+    const enS = UI_STRINGS.en as unknown as Record<string, string>;
+    const it = Object.keys(itS).sort();
+    const en = Object.keys(enS).sort();
     expect(it.length).toBeGreaterThan(50);
     expect(en).toEqual(it);
     for (const key of it) {
-      expect(page["it"]![key]!.length).toBeGreaterThan(0);
-      expect(page["en"]![key]!.length).toBeGreaterThan(0);
+      const stampIt = parsed.it![key];
+      const stampEn = parsed.en![key];
+      expect(stampIt, `the stamped value for "${key}" is missing`).toBe(itS[key]);
+      expect(stampEn, `the stamped value for "${key}" is wrong`).toBe(enS[key]);
+      expect(itS[key]?.length).toBeGreaterThan(0);
+      expect(enS[key]?.length).toBeGreaterThan(0);
     }
   });
 
   test("every key the markup and the script ask for is in the catalogue", () => {
     const used = new Set<string>();
     for (const m of html.matchAll(/\b(?:t|tf)\("([^"]+)"/g)) used.add(m[1]!);
-    for (const m of html.matchAll(/data-i18n(?:-title|-aria|-ph)?="([^"]+)"/g))
-      used.add(m[1]!);
+    for (const m of html.matchAll(/data-i18n(?:-title|-aria|-ph)?="([^"]+)"/g)) used.add(m[1]!);
     used.add("msg.cut"); // the one string CSS shows (content: "  ✂ " var(--cut))
     expect(used.size).toBeGreaterThan(40);
+    const itS2 = UI_STRINGS.it as unknown as Record<string, string>;
+    const enS2 = UI_STRINGS.en as unknown as Record<string, string>;
     for (const key of used) {
-      expect(page["it"]![key], `it is missing "${key}"`).toBeDefined();
-      expect(page["en"]![key], `en is missing "${key}"`).toBeDefined();
+      expect(itS2[key], `it is missing "${key}"`).toBeDefined();
+      expect(enS2[key], `en is missing "${key}"`).toBeDefined();
     }
   });
 });

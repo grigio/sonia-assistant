@@ -42,11 +42,7 @@ export function parseWav(buf: Uint8Array): { rate: number; channels: number; sam
   if (!fmtRead || dataStart < 0) throw new Error("WAV: missing fmt/data chunk");
   if (bits !== 16) throw new Error(`WAV: need 16-bit PCM, got ${bits}-bit`);
 
-  const samples = new Int16Array(
-    buf.buffer,
-    buf.byteOffset + dataStart,
-    Math.floor(dataLen / 2),
-  );
+  const samples = new Int16Array(buf.buffer, buf.byteOffset + dataStart, Math.floor(dataLen / 2));
   return { rate, channels, samples: samples.slice() };
 }
 

@@ -20,14 +20,14 @@ type Client = { ws: Socket; history: HistoryMsg[] };
 
 const clients = new Set<Client>();
 
-const server = Bun.serve<WsData>({
+const _server = Bun.serve<WsData>({
   port: PORT,
   fetch(req, srv) {
     const url = new URL(req.url);
     if (url.pathname !== "/ws") return new Response("sonia mock harness", { status: 200 });
     console.log(
       `[mock] upgrade ${url.pathname} · Origin=${req.headers.get("origin") ?? "(none)"} ` +
-      `· User-Agent=${(req.headers.get("user-agent") ?? "(none)").slice(0, 60)}`,
+        `· User-Agent=${(req.headers.get("user-agent") ?? "(none)").slice(0, 60)}`,
     );
     const ok = srv.upgrade(req, { data: { history: [], mic: 0 } });
     if (ok) return undefined as unknown as Response;
@@ -40,7 +40,9 @@ const server = Bun.serve<WsData>({
         try {
           c.ws.send(JSON.stringify({ type: "session_taken" }));
           c.ws.close(1000, "replaced by a new client");
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
       const client: Client = { ws, history: ws.data.history };
       clients.add(client);
@@ -57,12 +59,20 @@ const server = Bun.serve<WsData>({
             { role: "assistant", content: "Sono le tre del pomeriggio.", id: 2 },
           ],
           models: [
-            "qwen3.5-4b-mtp-q4_k_m", "qwen3.5-4b-q8_0", "gemma-4-12b-it-q4",
-            "llama-4-8b-instruct", "phi-4-mini", "mistral-small-3.2",
+            "qwen3.5-4b-mtp-q4_k_m",
+            "qwen3.5-4b-q8_0",
+            "gemma-4-12b-it-q4",
+            "llama-4-8b-instruct",
+            "phi-4-mini",
+            "mistral-small-3.2",
           ],
           config: {
-            half_duplex: false, barge_in: true, decision_mode: "auto",
-            cmd_mode: "ask", llm_via_pi: false, thinking: true,
+            half_duplex: false,
+            barge_in: true,
+            decision_mode: "auto",
+            cmd_mode: "ask",
+            llm_via_pi: false,
+            thinking: true,
           },
           context: { used: 1480, total: 32768 },
           pending_command: null,
@@ -111,8 +121,10 @@ function handleCommand(c: Client, ev: Record<string, unknown>): void {
   // one line per client command: the test harness reads this to verify the flow
   // even when the screenshot is stale (a windowed nested session stops rendering
   // while it is occluded).
-  const brief = (v: unknown) => (typeof v === "string" && v.length > 60 ? v.slice(0, 60) + "…" : v);
-  console.log(`[mock] <- ${ev.type} ${JSON.stringify(brief(ev.text) ?? ev.id ?? ev.model ?? "")}`.trimEnd());
+  const brief = (v: unknown) => (typeof v === "string" && v.length > 60 ? `${v.slice(0, 60)}…` : v);
+  console.log(
+    `[mock] <- ${ev.type} ${JSON.stringify(brief(ev.text) ?? ev.id ?? ev.model ?? "")}`.trimEnd(),
+  );
   switch (ev.type) {
     case "text": {
       const text = String(ev.text ?? "");
@@ -161,13 +173,22 @@ function handleCommand(c: Client, ev: Record<string, unknown>): void {
       if (/tool/i.test(text)) {
         setTimeout(() => {
           send({
-            type: "tool", phase: "start", origin: "harness", id: "t" + nextId,
-            tool: "run_command", summary: "uptime", args: { cmd: "uptime" },
+            type: "tool",
+            phase: "start",
+            origin: "harness",
+            id: `t${nextId}`,
+            tool: "run_command",
+            summary: "uptime",
+            args: { cmd: "uptime" },
           });
           setTimeout(() => {
             send({
-              type: "tool", phase: "end", origin: "harness", id: "t" + (nextId - 1) || "t",
-              tool: "run_command", summary: "uptime",
+              type: "tool",
+              phase: "end",
+              origin: "harness",
+              id: `t${nextId - 1}` || "t",
+              tool: "run_command",
+              summary: "uptime",
               result: " 18:42:07 up 3 days, load average: 0.42, 0.51, 0.63",
               info: "exit 0 · 12 ms",
             });
@@ -175,12 +196,22 @@ function handleCommand(c: Client, ev: Record<string, unknown>): void {
         }, 300);
         setTimeout(() => {
           send({
-            type: "tool", phase: "start", origin: "harness", id: "g" + nextId,
-            tool: "run_command", summary: "rm -rf /", args: { cmd: "rm -rf /" },
+            type: "tool",
+            phase: "start",
+            origin: "harness",
+            id: `g${nextId}`,
+            tool: "run_command",
+            summary: "rm -rf /",
+            args: { cmd: "rm -rf /" },
           });
           send({
-            type: "tool", phase: "end", origin: "harness", id: "g" + nextId,
-            tool: "run_command", summary: "rm -rf /", blocked: true,
+            type: "tool",
+            phase: "end",
+            origin: "harness",
+            id: `g${nextId}`,
+            tool: "run_command",
+            summary: "rm -rf /",
+            blocked: true,
           });
         }, 1500);
       }
@@ -188,7 +219,9 @@ function handleCommand(c: Client, ev: Record<string, unknown>): void {
         const cid = nextId++;
         setTimeout(() => {
           send({
-            type: "command_request", id: cid, command: "ls -la /tmp",
+            type: "command_request",
+            id: cid,
+            command: "ls -la /tmp",
             reason: "l'utente ha chiesto i file di /tmp",
           });
         }, 1200);
@@ -197,7 +230,8 @@ function handleCommand(c: Client, ev: Record<string, unknown>): void {
       if (/timer/i.test(text)) {
         setTimeout(() => {
           send({
-            type: "tasks", tasks: [
+            type: "tasks",
+            tasks: [
               { id: "timer-1", kind: "timer", label: "timer 42 s", due_in_ms: 42_000 },
               { id: "timer-2", kind: "timer", label: "timer 90 s", due_in_ms: 90_000 },
             ],
@@ -228,9 +262,8 @@ function handleCommand(c: Client, ev: Record<string, unknown>): void {
     }
     case "task_cancel":
       send({
-        type: "tasks", tasks: [
-          { id: "timer-1", kind: "timer", label: "timer 42 s", due_in_ms: 42_000 },
-        ],
+        type: "tasks",
+        tasks: [{ id: "timer-1", kind: "timer", label: "timer 42 s", due_in_ms: 42_000 }],
       });
       return;
     case "approve": {
@@ -238,25 +271,41 @@ function handleCommand(c: Client, ev: Record<string, unknown>): void {
       const ok = Boolean(ev.ok);
       send({ type: "command_resolved", id: cid });
       if (!ok) {
-        send({ type: "command_result", id: cid, command: "ls -la /tmp", status: "denied", output: "" });
+        send({
+          type: "command_result",
+          id: cid,
+          command: "ls -la /tmp",
+          status: "denied",
+          output: "",
+        });
         return;
       }
       send({ type: "command_start", id: cid, command: "ls -la /tmp", auto: false });
       setTimeout(() => {
         send({
-          type: "command_result", id: cid, command: "ls -la /tmp", status: "exit 0",
-          output: "total 0\ndrwx------ 1 g g 128 Oct 15 18:00 systemd-private-aaa\ndrwx------ 1 g g  96 Oct 15 18:42 tmp-sonia",
+          type: "command_result",
+          id: cid,
+          command: "ls -la /tmp",
+          status: "exit 0",
+          output:
+            "total 0\ndrwx------ 1 g g 128 Oct 15 18:00 systemd-private-aaa\ndrwx------ 1 g g  96 Oct 15 18:42 tmp-sonia",
         });
       }, 900);
       return;
     }
     case "models_refresh":
       send({
-        type: "models", models: [
-          "qwen3.5-4b-mtp-q4_k_m", "gemma-4-12b-it-q4", "llama-4-8b-instruct",
-          "phi-4-mini", "mistral-small-3.2", "qwen3.5-14b-q4_k_m",
+        type: "models",
+        models: [
+          "qwen3.5-4b-mtp-q4_k_m",
+          "gemma-4-12b-it-q4",
+          "llama-4-8b-instruct",
+          "phi-4-mini",
+          "mistral-small-3.2",
+          "qwen3.5-14b-q4_k_m",
         ],
-        current: "qwen3.5-4b-mtp-q4_k_m", via_pi: false,
+        current: "qwen3.5-4b-mtp-q4_k_m",
+        via_pi: false,
       });
       return;
     case "model":
@@ -265,7 +314,8 @@ function handleCommand(c: Client, ev: Record<string, unknown>): void {
       return;
     case "skills_refresh":
       send({
-        type: "skills", dir: "/home/g/.pi/agent/skills",
+        type: "skills",
+        dir: "/home/g/.pi/agent/skills",
         skills: [
           { name: "websurfx", description: "Ricerca web", active: true },
           { name: "hackernews", description: "HN", active: false },
@@ -295,7 +345,10 @@ function sendPcm(c: Client, freq: number, dur: number): void {
     const pcm = new Int16Array(slice);
     for (let i = 0; i < slice; i++) {
       const t = (sent + i) / RATE;
-      pcm[i] = Math.sin(2 * Math.PI * freq * t) * 8000 * (0.4 + 0.6 * Math.abs(Math.sin(2 * Math.PI * 2 * t)));
+      pcm[i] =
+        Math.sin(2 * Math.PI * freq * t) *
+        8000 *
+        (0.4 + 0.6 * Math.abs(Math.sin(2 * Math.PI * 2 * t)));
     }
     c.ws.send(new Uint8Array(pcm.buffer));
     sent += slice;

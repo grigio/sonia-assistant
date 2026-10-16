@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { once } from "node:events";
 /**
  * `bun run models-download` — the model files this configuration needs, checked and fetched.
  *
@@ -23,7 +24,6 @@
  * half-fetched file is never mistaken for a model and the next run resumes where it stopped.
  */
 import fs from "node:fs";
-import { once } from "node:events";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Config, ROOT } from "../src/config";
@@ -35,9 +35,32 @@ const SILERO =
 /** The voices of a Pocket TTS pack (`…/<lang>/embeddings/<voice>.safetensors`) — the same
  *  26 ids ship in every language pack, so one list serves `TTS_LANG=italian|english|…`. */
 const VOICES = [
-  "alba", "anna", "azelma", "bill_boerst", "caro_davy", "charles", "cosette", "eponine",
-  "estelle", "eve", "fantine", "george", "giovanni", "jane", "javert", "jean", "juergen",
-  "lola", "marius", "mary", "michael", "paul", "peter_yearsley", "rafael", "stuart_bell", "vera",
+  "alba",
+  "anna",
+  "azelma",
+  "bill_boerst",
+  "caro_davy",
+  "charles",
+  "cosette",
+  "eponine",
+  "estelle",
+  "eve",
+  "fantine",
+  "george",
+  "giovanni",
+  "jane",
+  "javert",
+  "jean",
+  "juergen",
+  "lola",
+  "marius",
+  "mary",
+  "michael",
+  "paul",
+  "peter_yearsley",
+  "rafael",
+  "stuart_bell",
+  "vera",
 ];
 
 /** One file to have on disk. `url` absent → checkable but not fetchable (say why in `note`).
@@ -125,10 +148,18 @@ function plan(cfg: Config): { files: ModelFile[]; skipped: Skip[]; modelsDir: st
   const asrName = `voxtral-mini-4b-realtime-2602-${asrPrecision}.gguf`;
   const asrDef = path.join(modelsDir, "Voxtral-Mini-4B-Realtime-2602-GGUF", asrName);
   if (cfg.asrModel !== "voxtral") {
-    skip("asr", `ASR_MODEL=${cfg.asrModel} — no download source known for it (add one in scripts/models-download.ts)`);
+    skip(
+      "asr",
+      `ASR_MODEL=${cfg.asrModel} — no download source known for it (add one in scripts/models-download.ts)`,
+    );
   } else if (ASR_PRECISIONS.includes(asrPrecision)) {
-    add("asr", "ASR_GGUF", process.env.ASR_GGUF, asrDef,
-      `${HF}/Voxtral-Mini-4B-Realtime-2602-GGUF/${asrName}`);
+    add(
+      "asr",
+      "ASR_GGUF",
+      process.env.ASR_GGUF,
+      asrDef,
+      `${HF}/Voxtral-Mini-4B-Realtime-2602-GGUF/${asrName}`,
+    );
   } else {
     // still tracked (so `--check` fails instead of passing on an unservable path), but
     // without a URL: only the packages above are published on the mirror
@@ -142,14 +173,25 @@ function plan(cfg: Config): { files: ModelFile[]; skipped: Skip[]; modelsDir: st
   // TTS — Pocket TTS (`TTS_LANG` picks the pack: english | german | italian | …) + its voices
   const lang = cfg.ttsLang.trim().toLowerCase();
   if (cfg.ttsModel !== "pocket-it") {
-    skip("tts", `TTS_MODEL=${cfg.ttsModel} — no download source known for it (add one in scripts/models-download.ts)`);
+    skip(
+      "tts",
+      `TTS_MODEL=${cfg.ttsModel} — no download source known for it (add one in scripts/models-download.ts)`,
+    );
   } else if (!TTS_LANGS.includes(lang)) {
-    skip("tts", `TTS_LANG=${cfg.ttsLang} — not a published Pocket TTS pack (known: ${TTS_LANGS.join(" | ")})`);
+    skip(
+      "tts",
+      `TTS_LANG=${cfg.ttsLang} — not a published Pocket TTS pack (known: ${TTS_LANGS.join(" | ")})`,
+    );
   } else {
     const precision = (process.env.TTS_PRECISION ?? "bf16").trim() || "bf16";
     const packDir = path.join(modelsDir, "PocketTTS-GGUF", lang);
-    add("tts", "TTS_GGUF", process.env.TTS_GGUF, path.join(packDir, `pocket-tts-${lang}-${precision}.gguf`),
-      `${HF}/PocketTTS-GGUF/${lang}/pocket-tts-${lang}-${precision}.gguf`);
+    add(
+      "tts",
+      "TTS_GGUF",
+      process.env.TTS_GGUF,
+      path.join(packDir, `pocket-tts-${lang}-${precision}.gguf`),
+      `${HF}/PocketTTS-GGUF/${lang}/pocket-tts-${lang}-${precision}.gguf`,
+    );
 
     const voicesDir = abs(cfg.ttsVoicesDir);
     if (path.resolve(voicesDir) === path.resolve(path.join(packDir, "embeddings"))) {
@@ -161,7 +203,10 @@ function plan(cfg: Config): { files: ModelFile[]; skipped: Skip[]; modelsDir: st
         });
       }
       if (!VOICES.includes(cfg.ttsVoice)) {
-        skip("tts", `TTS_VOICE=${cfg.ttsVoice} — not one of the ${VOICES.length} voices of the pack; set TTS_VOICE_DIR to your own dir of <voice>.safetensors`);
+        skip(
+          "tts",
+          `TTS_VOICE=${cfg.ttsVoice} — not one of the ${VOICES.length} voices of the pack; set TTS_VOICE_DIR to your own dir of <voice>.safetensors`,
+        );
       }
     } else {
       // a custom voice dir (TTS_VOICE_DIR): only the selected voice can be checked here
@@ -176,9 +221,18 @@ function plan(cfg: Config): { files: ModelFile[]; skipped: Skip[]; modelsDir: st
   // turn — Smart Turn v3.2 (end-of-turn classifier)
   const turnDef = path.join(modelsDir, "Smart-Turn-v3-GGUF", "smart-turn-v3.2-f32.gguf");
   if (cfg.turnModel === "smart-turn") {
-    add("turn", "TURN_GGUF", process.env.TURN_GGUF, turnDef, `${HF}/Smart-Turn-v3-GGUF/smart-turn-v3.2-f32.gguf`);
+    add(
+      "turn",
+      "TURN_GGUF",
+      process.env.TURN_GGUF,
+      turnDef,
+      `${HF}/Smart-Turn-v3-GGUF/smart-turn-v3.2-f32.gguf`,
+    );
   } else {
-    skip("turn", `TURN_MODEL=${cfg.turnModel} — no download source known for it (add one in scripts/models-download.ts)`);
+    skip(
+      "turn",
+      `TURN_MODEL=${cfg.turnModel} — no download source known for it (add one in scripts/models-download.ts)`,
+    );
   }
 
   // VAD — Silero v5, ONNX, in-process (always needed, whatever the servers do)
@@ -215,8 +269,10 @@ function check(files: ModelFile[], skipped: Skip[], modelsDir: string, mode: Mod
   if (skipped.length) console.log();
 
   if (missing) {
-    console.log(`${missing} of ${files.length} model files missing` +
-      (mode === "check" ? " → run: bun run models-download" : ""));
+    console.log(
+      `${missing} of ${files.length} model files missing` +
+        (mode === "check" ? " → run: bun run models-download" : ""),
+    );
     console.log(dim(`(on disk: ${human(onDisk)} in ${rel(modelsDir)})`));
   } else {
     console.log(`all ${files.length} model files present (${human(onDisk)})`);
@@ -306,7 +362,9 @@ async function download(files: ModelFile[], modelsDir: string): Promise<number> 
       continue;
     }
     if (!f.url) {
-      console.log(`${red("✗")} ${rel(f.path)} ${dim(`MISSING — ${f.note ?? "no download source"}`)}`);
+      console.log(
+        `${red("✗")} ${rel(f.path)} ${dim(`MISSING — ${f.note ?? "no download source"}`)}`,
+      );
       failed++;
       continue;
     }
@@ -319,8 +377,10 @@ async function download(files: ModelFile[], modelsDir: string): Promise<number> 
       failed++;
       const reason = err instanceof Error ? err.message : String(err);
       const partial = sizeOf(`${f.path}.part`);
-      console.log(`  ${red(`failed: ${reason}`)}` +
-        (partial ? dim(` — ${human(partial)} kept, resumes on the next run`) : ""));
+      console.log(
+        `  ${red(`failed: ${reason}`)}` +
+          (partial ? dim(` — ${human(partial)} kept, resumes on the next run`) : ""),
+      );
     }
   }
 
@@ -373,8 +433,7 @@ async function main(): Promise<number> {
   // files must not make `--check` fail here, and their skips must not clutter the output)
   const chosen = only ? files.filter((f) => f.pkg === only) : files;
   const chosenSkips = only ? skipped.filter((s) => s.pkg === only) : skipped;
-  if (only)
-    console.log(dim(`--only ${only}: ${chosen.length} of ${files.length} file(s)`));
+  if (only) console.log(dim(`--only ${only}: ${chosen.length} of ${files.length} file(s)`));
   if (mode === "check") return check(chosen, chosenSkips, modelsDir, mode);
 
   const failed = await download(chosen, modelsDir);

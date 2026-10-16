@@ -16,8 +16,8 @@ import { afterAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Config } from "../../src/config";
 import type { ChatMessage, StreamItem } from "../../src/clients/llm";
+import { Config } from "../../src/config";
 import { Assistant } from "../../src/harness/assistant";
 import { Skills } from "../../src/skills";
 import { Tools } from "../../src/tools";
@@ -44,7 +44,7 @@ function scripted(plans: Plan[]): { a: Assistant; requests: ChatMessage[][] } {
   const cfg = Config.fromEnv();
   cfg.llmEnableTools = true;
   cfg.llmViaPi = false;
-  cfg.locale = "it";          // this file pins Italian wording ("interrotto") — not the .env
+  cfg.locale = "it"; // this file pins Italian wording ("interrotto") — not the .env
   const a = new Assistant(cfg, null, "null");
   a.log = () => {};
   a.skills = new Skills({ dir, dataDir: path.join(tmp, "data") });
@@ -115,9 +115,9 @@ describe("a tool exchange lives in the history, not only in its own request", ()
 
     await turn(a, "e adesso?");
     const second = requests.at(-1)!;
-    expect(
-      second.some((m) => m.role === "tool" && String(m.content).includes("# Demo")),
-    ).toBe(true);
+    expect(second.some((m) => m.role === "tool" && String(m.content).includes("# Demo"))).toBe(
+      true,
+    );
     expect(second.some((m) => m.content === "Ho letto la skill.")).toBe(true); // the turn before
     expect(second.at(-1)!.content).toBe("e adesso?");
   });
@@ -179,8 +179,8 @@ describe("a response cut mid-exchange", () => {
     a.cancelResponse(true);
 
     expect(a.history.some((m) => m.tool_calls?.length)).toBe(false); // c2 never answered
-    expect(a.history.some((m) => m.role === "tool")).toBe(false);    // …nor c1's half
-    expect(a.history.at(-1)!.role).toBe("assistant");                // still spoken, still kept
+    expect(a.history.some((m) => m.role === "tool")).toBe(false); // …nor c1's half
+    expect(a.history.at(-1)!.role).toBe("assistant"); // still spoken, still kept
     expect(a.history.at(-1)!.content).toContain("interrotto");
   });
 
@@ -198,7 +198,7 @@ describe("a response cut mid-exchange", () => {
     expect(a.history[2]!.content).toBe("corpo della skill"); // the read is not thrown away
   });
 
-  test("\"user continued\" rolls the whole turn back, tool cards included", () => {
+  test('"user continued" rolls the whole turn back, tool cards included', () => {
     const { a } = scripted([]);
     a.history = [
       { role: "assistant", content: "prima risposta" },

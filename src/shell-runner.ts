@@ -32,7 +32,7 @@ export async function runShell(
 ): Promise<RunResult> {
   const { timeoutS, signal } = opts;
   const proc = spawn("/bin/bash", ["-c", command], {
-    cwd: opts.cwd ?? process.env["HOME"] ?? "/",
+    cwd: opts.cwd ?? process.env.HOME ?? "/",
     stdio: ["ignore", "pipe", "pipe"],
     detached: true, // own process group → kill the whole tree on timeout/abort
   });

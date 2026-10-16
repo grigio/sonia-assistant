@@ -42,8 +42,8 @@ function startFakeAsr(opts: { status?: string; chunked?: boolean } = {}): Promis
                 "data: [DONE]\n\n";
               if (chunked) {
                 const frame = (payload: string) =>
-                  Buffer.byteLength(payload).toString(16) + "\r\n" + payload + "\r\n";
-                sock.write(frame(sse) + "0\r\n\r\n");
+                  `${Buffer.byteLength(payload).toString(16)}\r\n${payload}\r\n`;
+                sock.write(`${frame(sse)}0\r\n\r\n`);
               } else {
                 sock.write(sse);
               }
@@ -94,11 +94,8 @@ describe("LiveTranscription", () => {
   test("full-duplex: chunked request out, SSE transcript in, finish() returns final text", async () => {
     const fake = await startFakeAsr();
     const partials: string[] = [];
-    const lt = new LiveTranscription(
-      `http://127.0.0.1:${fake.port}`,
-      "voxtral",
-      "",
-      (t) => partials.push(t),
+    const lt = new LiveTranscription(`http://127.0.0.1:${fake.port}`, "voxtral", "", (t) =>
+      partials.push(t),
     );
 
     await lt.open();

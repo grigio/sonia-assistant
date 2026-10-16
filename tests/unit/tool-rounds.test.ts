@@ -26,22 +26,35 @@ import { afterAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Config } from "../../src/config";
 import type { ChatMessage, StreamItem } from "../../src/clients/llm";
+import { Config } from "../../src/config";
 import type { ServerEvent } from "../../src/events";
 import { Assistant, TOOL_ROUNDS } from "../../src/harness/assistant";
-import { Tools } from "../../src/tools";
 import { t } from "../../src/i18n";
+import { Tools } from "../../src/tools";
 
 type Plan = { calls?: { name: string; args: string }[]; text?: string };
 
 const LT = "<";
 /** The markup the live model wrote when it ran out of tool rounds (17:37:57). */
 const MARKUP =
-  LT + "toolcall " + LT + "function=runcommand " + LT + "parameter=command " +
-  "ls -la /sys/devices/system/memory/memory188/ " + LT + "/parameter " +
-  LT + "parameter=reason Check RAM details " + LT + "/parameter " +
-  LT + "/function " + LT + "/toolcall";
+  LT +
+  "toolcall " +
+  LT +
+  "function=runcommand " +
+  LT +
+  "parameter=command " +
+  "ls -la /sys/devices/system/memory/memory188/ " +
+  LT +
+  "/parameter " +
+  LT +
+  "parameter=reason Check RAM details " +
+  LT +
+  "/parameter " +
+  LT +
+  "/function " +
+  LT +
+  "/toolcall";
 
 const dirs: string[] = [];
 afterAll(() => {
@@ -66,7 +79,7 @@ function scripted(plans: Plan[]): {
   cfg.llmEnableTools = true;
   cfg.llmViaPi = false;
   cfg.toolGate = false; // the gate is a network judge: this file tests the round loop
-  cfg.locale = "it";     // the fallback line is asserted in Italian — not in the .env
+  cfg.locale = "it"; // the fallback line is asserted in Italian — not in the .env
   const a = new Assistant(cfg, null, "null");
   a.log = () => {};
   a.tools = new Tools({
@@ -137,14 +150,14 @@ describe("a turn never ends on a tool call", () => {
     await turn(a, "che ore sono?");
 
     expect(requests).toHaveLength(TOOL_ROUNDS + 1);
-    expect(offered[0]).not.toBeNull();                       // the tool rounds may call
+    expect(offered[0]).not.toBeNull(); // the tool rounds may call
     expect(offered[TOOL_ROUNDS - 1]).not.toBeNull();
-    expect(offered[TOOL_ROUNDS]).toBeNull();                 // …the last one must not
+    expect(offered[TOOL_ROUNDS]).toBeNull(); // …the last one must not
     expect(requests[TOOL_ROUNDS]!.some((m) => m.role === "tool")).toBe(true); // results in
     expect(a.history.at(-1)!.role).toBe("assistant");
     expect(a.history.at(-1)!.content).toBe("Sono le sedici e venti.");
-    expect(segments).toContain("Sono le sedici e venti.");   // and it reached the TTS
-    expect(a.resp).toBeNull();                               // the turn really finished
+    expect(segments).toContain("Sono le sedici e venti."); // and it reached the TTS
+    expect(a.resp).toBeNull(); // the turn really finished
   });
 
   test("the tool-less request says so in words (no schema → no markup as text)", async () => {
@@ -173,12 +186,10 @@ describe("a turn never ends on a tool call", () => {
 
     expect(requests).toHaveLength(TOOL_ROUNDS + 1);
     const fallback = t("it", "spoken.noAnswer");
-    expect(segments).toContain(fallback);          // the user hears *something*
+    expect(segments).toContain(fallback); // the user hears *something*
     expect(a.history.at(-1)!.role).toBe("assistant");
     expect(a.history.at(-1)!.content).toBe(fallback); // …and no empty assistant line
-    expect(
-      events.some((e) => e.type === "assistant_done" && e.text === fallback),
-    ).toBe(true);
+    expect(events.some((e) => e.type === "assistant_done" && e.text === fallback)).toBe(true);
   });
 
   test("a model asking for tools forever gets a bounded number of requests", async () => {
@@ -197,12 +208,7 @@ describe("a turn never ends on a tool call", () => {
   test("an answered exchange is kept whole: call and result together", async () => {
     const { a } = scripted([{ calls: clock() }, { text: "Le sedici e venti." }]);
     await turn(a, "che ore sono?");
-    expect(a.history.map((m) => m.role)).toEqual([
-      "user",
-      "assistant",
-      "tool",
-      "assistant",
-    ]);
+    expect(a.history.map((m) => m.role)).toEqual(["user", "assistant", "tool", "assistant"]);
     expect(a.history[1]!.tool_calls).toHaveLength(1);
   });
 });

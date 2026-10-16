@@ -17,20 +17,18 @@ export class SileroVAD {
   constructor(modelPath: string) {
     this.state = new ort.Tensor("float32", new Float32Array(2 * 1 * 128), [2, 1, 128]);
     this.context = new Float32Array(CONTEXT);
-    this.ready = ort.InferenceSession
-      .create(modelPath, {
-        executionProviders: ["cpu"],
-        graphOptimizationLevel: "all",
-        intraOpNumThreads: 1,
-        interOpNumThreads: 1,
-      })
-      .then((s) => {
-        this.sess = s;
-        // outputs are unpacked positionally: [0] = output, [1] = state
-        const names = s.outputNames;
-        if (names.length >= 2) this.outKeys = [names[0]!, names[1]!];
-        return this;
-      });
+    this.ready = ort.InferenceSession.create(modelPath, {
+      executionProviders: ["cpu"],
+      graphOptimizationLevel: "all",
+      intraOpNumThreads: 1,
+      interOpNumThreads: 1,
+    }).then((s) => {
+      this.sess = s;
+      // outputs are unpacked positionally: [0] = output, [1] = state
+      const names = s.outputNames;
+      if (names.length >= 2) this.outKeys = [names[0]!, names[1]!];
+      return this;
+    });
   }
 
   reset(): void {

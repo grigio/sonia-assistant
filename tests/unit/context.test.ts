@@ -4,10 +4,10 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Config } from "../../src/config";
 import { LLM } from "../../src/clients/llm";
-import { PiSession } from "../../src/clients/pi";
 import type { StreamItem } from "../../src/clients/llm-types";
+import { PiSession } from "../../src/clients/pi";
+import { Config } from "../../src/config";
 import {
   contextsFromPiList,
   contextsFromServerModels,
@@ -28,7 +28,7 @@ describe("parseContextSize", () => {
     expect(parseContextSize("8192")).toBe(8192);
   });
 
-  test("K/M/G are the powers of ten pi displays (32768 → \"32.8K\")", () => {
+  test('K/M/G are the powers of ten pi displays (32768 → "32.8K")', () => {
     expect(parseContextSize("32.8K")).toBe(32800);
     expect(parseContextSize("128K")).toBe(128000);
     expect(parseContextSize("1M")).toBe(1_000_000);
@@ -36,7 +36,7 @@ describe("parseContextSize", () => {
     expect(parseContextSize("200k")).toBe(200000);
   });
 
-  test("junk and zero mean \"unknown\"", () => {
+  test('junk and zero mean "unknown"', () => {
     expect(parseContextSize("")).toBe(0);
     expect(parseContextSize("n/a")).toBe(0);
     expect(parseContextSize("0")).toBe(0);
@@ -49,7 +49,7 @@ describe("contextsFromServerModels (GET /v1/models)", () => {
     const out = contextsFromServerModels({
       data: [{ id: "gemma", meta: { n_ctx: 32768, n_ctx_train: 262144 } }],
     });
-    expect(out["gemma"]).toBe(32768);
+    expect(out.gemma).toBe(32768);
   });
 
   test("unloaded models fall back to --ctx-size in status.args", () => {
@@ -61,14 +61,14 @@ describe("contextsFromServerModels (GET /v1/models)", () => {
         },
       ],
     });
-    expect(out["qwen"]).toBe(32768);
+    expect(out.qwen).toBe(32768);
   });
 
   test("aliases share the id's context window", () => {
     const out = contextsFromServerModels({
       data: [{ id: "a", aliases: ["a", "a-alias"], meta: { n_ctx: 8192 } }],
     });
-    expect(out["a"]).toBe(8192);
+    expect(out.a).toBe(8192);
     expect(out["a-alias"]).toBe(8192);
   });
 
@@ -86,7 +86,7 @@ describe("contextsFromPiList (pi --list-models)", () => {
     "llamacpp       gemma-4-12b-it-qat-q4_0            32.8K    8.2K     yes",
     "llamacpp       Qwen3.6-35B-compact                18.4K    8.2K     yes",
     "opencode       claude-fable-5                     1M       128K     yes",
-    "Warning: no models match pattern \"x\"",
+    'Warning: no models match pattern "x"',
     "",
   ].join("\n");
 
@@ -106,9 +106,7 @@ describe("contextsFromPiList (pi --list-models)", () => {
   });
 
   test("the first duplicate wins, like the model ids", () => {
-    const out = contextsFromPiList(
-      "p a 100 1 yes\np a 999 1 yes\n",
-    );
+    const out = contextsFromPiList("p a 100 1 yes\np a 999 1 yes\n");
     expect(out["p/a"]).toBe(100);
   });
 });
@@ -145,7 +143,9 @@ describe("LLM.stream — context usage", () => {
         start(ctrl) {
           for (const c of chunks) {
             ctrl.enqueue(
-              encoder.encode(c === "[DONE]" ? "data: [DONE]\n\n" : `data: ${JSON.stringify(c)}\n\n`),
+              encoder.encode(
+                c === "[DONE]" ? "data: [DONE]\n\n" : `data: ${JSON.stringify(c)}\n\n`,
+              ),
             );
           }
           ctrl.close();

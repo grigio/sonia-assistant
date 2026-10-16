@@ -17,7 +17,7 @@
  * of the browser's AEC, and the reason this client never needs one of its own.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 
 export const MIC_RATE = 16000;
 /** High-pass corner (Hz) for the capture chain; `SONIA_MIC_HPF=0` turns it off. */
@@ -125,14 +125,18 @@ export class HighPass {
   private o1 = new Float32Array(2);
   private o2 = new Float32Array(2);
 
-  constructor(readonly fc = 350, readonly rate = MIC_RATE, stages = 2) {
+  constructor(
+    readonly fc = 350,
+    readonly rate = MIC_RATE,
+    stages = 2,
+  ) {
     if (fc <= 0) return;
     const w = (2 * Math.PI * fc) / rate;
     const c = Math.cos(w);
     const sin = Math.sin(w);
     const k = sin / (2 * Math.SQRT1_2); // Butterworth Q
     const a0 = 1 + k;
-    this.b = [(1 + c) / 2 / a0, -(1 + c) / a0, ((1 + c) / 2) / a0];
+    this.b = [(1 + c) / 2 / a0, -(1 + c) / a0, (1 + c) / 2 / a0];
     this.a = [(-2 * c) / a0, (1 - k) / a0];
     this.stages = stages;
   }
@@ -150,21 +154,33 @@ export class HighPass {
     for (let s = 0; s < this.stages; s++) {
       const [b0, b1, b2] = this.b;
       const [a1, a2] = this.a;
-      let x1 = this.x1[s]!, x2 = this.x2[s]!, o1 = this.o1[s]!, o2 = this.o2[s]!;
+      let x1 = this.x1[s]!,
+        x2 = this.x2[s]!,
+        o1 = this.o1[s]!,
+        o2 = this.o2[s]!;
       for (let i = 0; i < v.length; i++) {
         const x = v[i]! / 32768;
         const y = b0! * x + b1! * x1 + b2! * x2 - a1! * o1 - a2! * o2;
-        x2 = x1; x1 = x; o2 = o1; o1 = y;
+        x2 = x1;
+        x1 = x;
+        o2 = o1;
+        o1 = y;
         v[i] = Math.max(-32768, Math.min(32767, Math.round(y * 32768)));
       }
-      this.x1[s] = x1; this.x2[s] = x2; this.o1[s] = o1; this.o2[s] = o2;
+      this.x1[s] = x1;
+      this.x2[s] = x2;
+      this.o1[s] = o1;
+      this.o2[s] = o2;
     }
     return pcm;
   }
 
   /** Where the filter is now — a device switch resets it (a new stream, new floor). */
   reset(): void {
-    this.x1.fill(0); this.x2.fill(0); this.o1.fill(0); this.o2.fill(0);
+    this.x1.fill(0);
+    this.x2.fill(0);
+    this.o1.fill(0);
+    this.o2.fill(0);
   }
 }
 
@@ -196,8 +212,17 @@ export class Mic {
     if (this.running) return;
     this.stopping = false;
     this.hp.reset();
-    const cmd = ["pw-record", "--rate", String(MIC_RATE), "--channels", "1",
-      "--format", "s16", "--latency", "32ms"];
+    const cmd = [
+      "pw-record",
+      "--rate",
+      String(MIC_RATE),
+      "--channels",
+      "1",
+      "--format",
+      "s16",
+      "--latency",
+      "32ms",
+    ];
     if (this.target) cmd.push("--target", this.target);
     cmd.push("-");
     const proc = spawn(cmd[0]!, cmd.slice(1), { stdio: ["ignore", "pipe", "pipe"] });
@@ -267,15 +292,34 @@ export class Speaker {
 
   /** (Re)spawn the player when it is dead or its rate/target changed. */
   ensure(rate: number, target = ""): void {
-    if (this.proc && this.proc.exitCode === null && this.pcmRate === rate && this.pcmTarget === target) {
+    if (
+      this.proc &&
+      this.proc.exitCode === null &&
+      this.pcmRate === rate &&
+      this.pcmTarget === target
+    ) {
       return;
     }
     this.close();
-    if (this.retry) { clearTimeout(this.retry); this.retry = null; }
+    if (this.retry) {
+      clearTimeout(this.retry);
+      this.retry = null;
+    }
     this.pcmRate = rate;
     this.pcmTarget = target;
-    const cmd = ["pw-cat", "--playback", "--raw", "--rate", String(rate),
-      "--channels", "1", "--format", "s16", "--latency", `${this.latencyMs}ms`];
+    const cmd = [
+      "pw-cat",
+      "--playback",
+      "--raw",
+      "--rate",
+      String(rate),
+      "--channels",
+      "1",
+      "--format",
+      "s16",
+      "--latency",
+      `${this.latencyMs}ms`,
+    ];
     if (target) cmd.push("--target", target);
     cmd.push("-");
     const proc = spawn(cmd[0]!, cmd.slice(1), { stdio: ["pipe", "ignore", "pipe"] });
@@ -285,7 +329,9 @@ export class Speaker {
     proc.stderr?.on("data", (d: Buffer) => {
       this.errTail = (this.errTail + d.toString("utf-8")).slice(-300);
     });
-    proc.stdin.on("error", () => { /* the reader went away */ });
+    proc.stdin.on("error", () => {
+      /* the reader went away */
+    });
     // A dead pw-cat used to stay dead for the rest of the session: every later
     // chunk went into a closed pipe and the assistant simply went mute part-way
     // through a sentence — the "interruptions". Come back on our own instead.
@@ -330,7 +376,10 @@ export class Speaker {
 
   close(): void {
     this.closing = true;
-    if (this.retry) { clearTimeout(this.retry); this.retry = null; }
+    if (this.retry) {
+      clearTimeout(this.retry);
+      this.retry = null;
+    }
     const p = this.proc;
     this.proc = null;
     if (p && p.exitCode === null) {

@@ -18,9 +18,7 @@ describe("sseData", () => {
   });
 
   test("splits across arbitrary chunk boundaries", async () => {
-    const out = await collect(
-      sseData(chunks('data: {"ty', 'pe":"delta"}\n', '\ndata: x\n', "\n")),
-    );
+    const out = await collect(sseData(chunks('data: {"ty', 'pe":"delta"}\n', "\ndata: x\n", "\n")));
     expect(out).toEqual(['{"type":"delta"}', "x"]);
   });
 

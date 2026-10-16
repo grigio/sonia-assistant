@@ -259,8 +259,7 @@ export class LiveTranscription {
           this.phase = "body";
         } else {
           const c = line.indexOf(":");
-          if (c > 0)
-            this.headers[line.slice(0, c).trim().toLowerCase()] = line.slice(c + 1).trim();
+          if (c > 0) this.headers[line.slice(0, c).trim().toLowerCase()] = line.slice(c + 1).trim();
         }
         continue;
       }
@@ -317,12 +316,12 @@ export class LiveTranscription {
     } catch {
       return;
     }
-    const t = (ev["type"] as string) ?? "";
+    const t = (ev.type as string) ?? "";
     if (t === "transcript.text.delta") {
-      this.text += (ev["delta"] as string) ?? "";
+      this.text += (ev.delta as string) ?? "";
       this.onPartial?.(this.text);
     } else if (t === "transcript.text.done") {
-      this.text = (ev["text"] as string) || this.text;
+      this.text = (ev.text as string) || this.text;
       this.resolveFinal(this.text);
     } else if (t === "error") {
       this.warn(`[asr] server error: ${data}`);
@@ -338,7 +337,7 @@ export class SmartTurn {
     baseUrl: string,
     private readonly model: string,
   ) {
-    this.url = baseUrl.replace(/\/$/, "") + "/v1/tasks/run";
+    this.url = `${baseUrl.replace(/\/$/, "")}/v1/tasks/run`;
   }
 
   /** The model looks at the last 8 s. */
@@ -399,7 +398,7 @@ export class TTS {
    *  Never throws: a cold voice only makes that one utterance slower. */
   async warmVoice(): Promise<void> {
     try {
-      const r = await fetch(this.base + "/v1/audio/speech", {
+      const r = await fetch(`${this.base}/v1/audio/speech`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: this.model, input: "Pronto.", voice: this.voice }),
@@ -416,7 +415,7 @@ export class TTS {
   async detectRate(): Promise<number> {
     let r: Response;
     try {
-      r = await fetch(this.base + "/v1/audio/speech", {
+      r = await fetch(`${this.base}/v1/audio/speech`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: this.model, input: "Pronto.", voice: this.voice }),
@@ -438,7 +437,7 @@ export class TTS {
   async *stream(text: string, signal?: AbortSignal): AsyncGenerator<Uint8Array, void, unknown> {
     let r: Response;
     try {
-      r = await fetch(this.base + "/v1/audio/speech", {
+      r = await fetch(`${this.base}/v1/audio/speech`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -471,9 +470,9 @@ export class TTS {
         } catch {
           continue;
         }
-        if (ev["type"] === "speech.audio.delta") {
-          yield Buffer.from(ev["audio"] as string, "base64");
-        } else if (ev["type"] === "error") {
+        if (ev.type === "speech.audio.delta") {
+          yield Buffer.from(ev.audio as string, "base64");
+        } else if (ev.type === "error") {
           throw new Error(`TTS stream error: ${data}`);
         }
       }

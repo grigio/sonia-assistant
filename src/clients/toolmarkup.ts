@@ -25,26 +25,26 @@ const LT = "<";
 
 /** What opens a markup block: whichever comes first in the stream wins. */
 export const TOOL_OPEN = [
-  LT + "toolcall>",
-  LT + "toolcall",
-  LT + "function=",
-  LT + "parameter=",
-  LT + "|tool_call|>",
-  LT + "|tool_calls|>",
-  LT + "|tool_args|>",
-  LT + "|tool_result|>",
+  `${LT}toolcall>`,
+  `${LT}toolcall`,
+  `${LT}function=`,
+  `${LT}parameter=`,
+  `${LT}|tool_call|>`,
+  `${LT}|tool_calls|>`,
+  `${LT}|tool_args|>`,
+  `${LT}|tool_result|>`,
 ] as const;
 
 /** What closes it (the `>`-less forms too: a model emits fragments, not tags). */
 export const TOOL_CLOSE = [
-  LT + "/toolcall>",
-  LT + "/toolcall",
-  LT + "/function>",
-  LT + "/function",
-  LT + "/parameter>",
-  LT + "/parameter",
-  LT + "|/tool_call|>",
-  LT + "|/tool_args|>",
+  `${LT}/toolcall>`,
+  `${LT}/toolcall`,
+  `${LT}/function>`,
+  `${LT}/function`,
+  `${LT}/parameter>`,
+  `${LT}/parameter`,
+  `${LT}|/tool_call|>`,
+  `${LT}|/tool_args|>`,
 ] as const;
 
 /** Outside a block a stray closer is dropped too (a call split into several fragments). */
@@ -88,9 +88,7 @@ export class ToolMarkupFilter {
       this.dropped += i + used.length;
       this.buf = this.buf.slice(i + used.length);
       // a closer outside a block is simply dropped; only an opener starts a block
-      this.inMarkup = this.inMarkup
-        ? false
-        : (TOOL_OPEN as readonly string[]).includes(used);
+      this.inMarkup = this.inMarkup ? false : (TOOL_OPEN as readonly string[]).includes(used);
     }
   }
 

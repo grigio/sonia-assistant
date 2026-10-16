@@ -5,13 +5,13 @@
  * stays runnable on its own.
  */
 export type {
-  ServerEvent,
   ClientCommand,
+  HelloConfig,
   HistoryMessage,
-  TaskInfo,
+  ServerEvent,
   SkillInfo,
   StateName,
-  HelloConfig,
+  TaskInfo,
 } from "../src/events";
 
 /**

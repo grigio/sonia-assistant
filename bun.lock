@@ -5,7 +5,7 @@
     "": {
       "name": "fullduplex-assistant",
       "dependencies": {
-        "onnxruntime-node": "^1.22.0",
+        "onnxruntime-node": "~1.30.0",
         "ws": "^8.18.0",
       },
       "devDependencies": {

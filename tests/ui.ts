@@ -188,8 +188,8 @@ async function testCheck(c: Ctx): Promise<void> {
   const otherVoice: string | undefined = voices.list.find((v: string) => v !== voices.val);
   if (otherVoice) {
     await c.js(
-      `voiceMeta.textContent = '…in viaggio…'; voiceSel.value = ${JSON.stringify(otherVoice)};`
-        + " voiceSel.dispatchEvent(new Event('change'));",
+      `voiceMeta.textContent = '…in viaggio…'; voiceSel.value = ${JSON.stringify(otherVoice)};` +
+        " voiceSel.dispatchEvent(new Event('change'));",
     );
     c.check(
       await c.until(
@@ -199,8 +199,8 @@ async function testCheck(c: Ctx): Promise<void> {
       `picking ${otherVoice} is accepted and echoed back`,
     );
     await c.js(
-      `voiceSel.value = ${JSON.stringify(voices.val)};`
-        + " voiceSel.dispatchEvent(new Event('change'));",
+      `voiceSel.value = ${JSON.stringify(voices.val)};` +
+        " voiceSel.dispatchEvent(new Event('change'));",
     );
     c.check(
       await c.until(`voiceSel.value === ${JSON.stringify(voices.val)}`, "voice restored"),
@@ -232,9 +232,15 @@ async function testCheck(c: Ctx): Promise<void> {
     await c.until("!modelSel.disabled && modelSel.value.indexOf('/') < 0", "API model id"),
     "toggle OFF → API model id in the select",
   );
-  c.check(await c.until("!modeBadge.classList.contains('on')", "badge off"), "toggle OFF → header badge hidden");
+  c.check(
+    await c.until("!modeBadge.classList.contains('on')", "badge off"),
+    "toggle OFF → header badge hidden",
+  );
   c.check(await c.until("piChk.checked === false", "checkbox off"), "checkbox unticked");
-  c.check(await c.until("!!ws && ws.readyState===1", "socket alive"), "socket still alive after the mode switch");
+  c.check(
+    await c.until("!!ws && ws.readyState===1", "socket alive"),
+    "socket still alive after the mode switch",
+  );
 
   // ── toggle pi ON again ──
   await c.js("piChk.click()");
@@ -246,7 +252,10 @@ async function testCheck(c: Ctx): Promise<void> {
     await c.js("document.querySelectorAll('#modelSel option').length > 1"),
     "toggle ON → pi model list restored",
   );
-  c.check(await c.until("modeBadge.classList.contains('on')", "badge on"), "toggle ON → header badge visible");
+  c.check(
+    await c.until("modeBadge.classList.contains('on')", "badge on"),
+    "toggle ON → header badge visible",
+  );
   c.check(await c.until("piChk.checked === true", "checkbox on"), "checkbox ticked");
 
   // ── contesto: la barra sta accanto al titolo e dice usato / totale ──
@@ -266,9 +275,7 @@ async function testCheck(c: Ctx): Promise<void> {
   // the whole point of the meter: the harness must really push it. A stale process (started
   // before the meter existed) answers hello without `context` and never emits the event —
   // the bar then sits at 0 forever, which looks like a broken bar but is a stale server.
-  const live = JSON.parse(
-    await c.js("JSON.stringify({got: lastCtx, txt: ctxText.textContent})"),
-  );
+  const live = JSON.parse(await c.js("JSON.stringify({got: lastCtx, txt: ctxText.textContent})"));
   c.check(
     live.got !== null && live.got.total > 0,
     "a `context` event arrived on this connection (not a stale harness)",
@@ -326,10 +333,10 @@ async function testCheck(c: Ctx): Promise<void> {
   await sleep(400);
   const muted = JSON.parse(
     await c.js(
-      "JSON.stringify({on: micOn, off: $('micBtn').classList.contains('off'),"
-        + " glyph: getComputedStyle($('micBtn').querySelector('.i-off')).display !== 'none',"
-        + " txt: $('micBtn').textContent,"
-        + " g: playerGain && playerGain.gain.value})",
+      "JSON.stringify({on: micOn, off: $('micBtn').classList.contains('off')," +
+        " glyph: getComputedStyle($('micBtn').querySelector('.i-off')).display !== 'none'," +
+        " txt: $('micBtn').textContent," +
+        " g: playerGain && playerGain.gain.value})",
     ),
   );
   console.log(`  muted: ${JSON.stringify(muted)}`);
@@ -340,9 +347,9 @@ async function testCheck(c: Ctx): Promise<void> {
   await sleep(400);
   const back = JSON.parse(
     await c.js(
-      "JSON.stringify({on: micOn, off: $('micBtn').classList.contains('off'),"
-        + " glyph: getComputedStyle($('micBtn').querySelector('.i-on')).display !== 'none',"
-        + " g: playerGain && playerGain.gain.value})",
+      "JSON.stringify({on: micOn, off: $('micBtn').classList.contains('off')," +
+        " glyph: getComputedStyle($('micBtn').querySelector('.i-on')).display !== 'none'," +
+        " g: playerGain && playerGain.gain.value})",
     ),
   );
   c.check(back.on === true && !back.off && back.glyph, "the mic icon comes back");
@@ -358,8 +365,8 @@ async function testCheck(c: Ctx): Promise<void> {
   // the assistant-voice mute lives in the header, immediately left of ↻
   c.check(
     await c.js(
-      "(()=>{const v=document.getElementById('voiceBtn'),r=document.getElementById('modelRefresh');"
-        + "return !!v && v.nextElementSibling === r && r.parentElement.contains(v);})()",
+      "(()=>{const v=document.getElementById('voiceBtn'),r=document.getElementById('modelRefresh');" +
+        "return !!v && v.nextElementSibling === r && r.parentElement.contains(v);})()",
     ),
     "🔊 button sits directly left of the ↻ model reload button",
   );
@@ -367,16 +374,15 @@ async function testCheck(c: Ctx): Promise<void> {
   await sleep(400);
   const voiceMuted = JSON.parse(
     await c.js(
-      "JSON.stringify({v: voiceOn, mic: micOn, off: $('voiceBtn').classList.contains('off'),"
-        + " glyph: getComputedStyle($('voiceBtn').querySelector('.i-off')).display !== 'none',"
-        + " pressed: $('voiceBtn').getAttribute('aria-pressed'),"
-        + " g: playerGain && playerGain.gain.value})",
+      "JSON.stringify({v: voiceOn, mic: micOn, off: $('voiceBtn').classList.contains('off')," +
+        " glyph: getComputedStyle($('voiceBtn').querySelector('.i-off')).display !== 'none'," +
+        " pressed: $('voiceBtn').getAttribute('aria-pressed')," +
+        " g: playerGain && playerGain.gain.value})",
     ),
   );
   console.log(`  voice muted: ${JSON.stringify(voiceMuted)}`);
   c.check(
-    voiceMuted.v === false && voiceMuted.off && voiceMuted.glyph
-      && voiceMuted.pressed === "false",
+    voiceMuted.v === false && voiceMuted.off && voiceMuted.glyph && voiceMuted.pressed === "false",
     "the speaker icon switches to muted",
   );
   c.check(Number(voiceMuted.g) < 0.5, "…through the playback gain");
@@ -385,9 +391,9 @@ async function testCheck(c: Ctx): Promise<void> {
   await sleep(400);
   const voiceBack = JSON.parse(
     await c.js(
-      "JSON.stringify({v: voiceOn, off: $('voiceBtn').classList.contains('off'),"
-        + " glyph: getComputedStyle($('voiceBtn').querySelector('.i-on')).display !== 'none',"
-        + " g: playerGain && playerGain.gain.value})",
+      "JSON.stringify({v: voiceOn, off: $('voiceBtn').classList.contains('off')," +
+        " glyph: getComputedStyle($('voiceBtn').querySelector('.i-on')).display !== 'none'," +
+        " g: playerGain && playerGain.gain.value})",
     ),
   );
   c.check(
@@ -456,7 +462,10 @@ async function testCheck(c: Ctx): Promise<void> {
     String(shown.title).includes("PI_MODEL") && String(shown.title).includes("gemma"),
     "the tooltip keeps PI_MODEL and reports the active filter",
   );
-  c.check(hits.length > 0 && hits.length < total, `typing narrows the list (${hits.length}/${total})`);
+  c.check(
+    hits.length > 0 && hits.length < total,
+    `typing narrows the list (${hits.length}/${total})`,
+  );
   c.check(
     hits.every((h) => h === here || h.includes("gemma")),
     "every shown model matches the fragment (active one always kept)",
@@ -547,12 +556,17 @@ async function testCheck(c: Ctx): Promise<void> {
     await type(other.f);
     await press("Enter");
     c.check(
-      await c.js(`window.__picked.length === 1 && window.__picked[0].model === ${JSON.stringify(other.m)}`),
+      await c.js(
+        `window.__picked.length === 1 && window.__picked[0].model === ${JSON.stringify(other.m)}`,
+      ),
       `typing + Enter announces the other model (${other.m})`,
     );
     c.check(await c.js(`modelSel.value === ${JSON.stringify(other.m)}`), "…and shows it selected");
-    await c.js("ws.send = window.__origSend; applyModelFilter();");  // un-swallow, back to the real model
-    c.check(await c.js(`modelSel.value === ${JSON.stringify(here)}`), "the header still shows the active model");
+    await c.js("ws.send = window.__origSend; applyModelFilter();"); // un-swallow, back to the real model
+    c.check(
+      await c.js(`modelSel.value === ${JSON.stringify(here)}`),
+      "the header still shows the active model",
+    );
   } else {
     c.check(false, "a second model exists to be picked by typing");
   }
@@ -585,8 +599,11 @@ async function testCheck(c: Ctx): Promise<void> {
   );
   c.check(
     // whichever language LOCALE picked for the page
-    await c.until("['Nuova conversazione.','New conversation.'].some(w => " +
-      "[...document.querySelectorAll('.event')].some(e => e.textContent === w))", "fresh chat line"),
+    await c.until(
+      "['Nuova conversazione.','New conversation.'].some(w => " +
+        "[...document.querySelectorAll('.event')].some(e => e.textContent === w))",
+      "fresh chat line",
+    ),
     "the fresh chat announces itself",
   );
   // the server's ack closes the barrier → new tool cards must render again
@@ -640,7 +657,7 @@ async function testTool(c: Ctx): Promise<void> {
       })())`,
     ),
   );
-  console.log("  card: " + JSON.stringify(info).slice(0, 400));
+  console.log(`  card: ${JSON.stringify(info).slice(0, 400)}`);
   c.check(info.name === "bash", "tool name is bash");
   c.check(String(info.sum).includes("date"), "header shows the command");
   c.check(
@@ -680,7 +697,10 @@ async function testModel(c: Ctx): Promise<void> {
   );
   console.log(`  ${opts.length} models, first 3: ${opts.slice(0, 3).join(", ")}`);
   c.check(opts.length > 1, "more than one model offered");
-  c.check(opts.every((o) => o.includes("/")), "every option is a provider/id");
+  c.check(
+    opts.every((o) => o.includes("/")),
+    "every option is a provider/id",
+  );
   c.check(opts.includes(PI_SMALL), `${PI_SMALL} is in the list (from pi, not hardcoded)`);
 
   // ── switch to the small model ──
@@ -689,7 +709,10 @@ async function testModel(c: Ctx): Promise<void> {
     `modelSel.value = ${JSON.stringify(PI_SMALL)}; modelSel.dispatchEvent(new Event('change'))`,
   );
   c.check(
-    await c.until(`modelSel.value === ${JSON.stringify(PI_SMALL)} && !modelSel.disabled`, "value updated"),
+    await c.until(
+      `modelSel.value === ${JSON.stringify(PI_SMALL)} && !modelSel.disabled`,
+      "value updated",
+    ),
     "select keeps the new model, re-enabled",
   );
   c.check(
@@ -715,9 +738,15 @@ async function testModel(c: Ctx): Promise<void> {
   );
 
   // ── back to the model we started with ──
-  await c.js(`modelSel.value = ${JSON.stringify(home)}; modelSel.dispatchEvent(new Event('change'))`);
+  await c.js(
+    `modelSel.value = ${JSON.stringify(home)}; modelSel.dispatchEvent(new Event('change'))`,
+  );
   c.check(
-    await c.until(`modelSel.value === ${JSON.stringify(home)} && !modelSel.disabled`, `back to ${home}`, 240),
+    await c.until(
+      `modelSel.value === ${JSON.stringify(home)} && !modelSel.disabled`,
+      `back to ${home}`,
+      240,
+    ),
     `switched back to ${home}`,
   );
 }
@@ -733,9 +762,7 @@ async function testSmoke(c: Ctx): Promise<void> {
   );
   await c.js("onCommandStart({id: 77, command: 'echo hi', auto: true})");
   c.check(await c.js("!document.querySelector('.cmd.pending')"), "card leaves the pending state");
-  await c.js(
-    "onCommandResult({id: 77, command: 'echo hi', status: 'exit 0', output: 'ciao\\n'})",
-  );
+  await c.js("onCommandResult({id: 77, command: 'echo hi', status: 'exit 0', output: 'ciao\\n'})");
   c.check(await c.js("!!document.querySelector('.cmd details pre')"), "output block renders");
   await c.js("document.querySelectorAll('.cmd').forEach(el => el.remove())");
 
@@ -822,7 +849,10 @@ async function testReasoning(c: Ctx): Promise<void> {
   // ── a new turn gets a block of its own (the `user` event resets it) ──
   const before = await c.js("document.querySelectorAll('.think').length");
   await c.js("send({type:'text', text:'ciao'})");
-  c.check(await c.until("!!document.querySelector('.msg.user')", "user message", 30), "a turn starts");
+  c.check(
+    await c.until("!!document.querySelector('.msg.user')", "user message", 30),
+    "a turn starts",
+  );
   await c.js("onReasoning('ragionamento del turno dopo.')");
   c.check(
     (await c.js("document.querySelectorAll('.think').length")) === (before as number) + 1,
@@ -886,7 +916,9 @@ async function testRewind(c: Ctx): Promise<void> {
     "each of them carries a ⟲ button with its tooltip",
   );
   const ids: number[] = JSON.parse(
-    await c.js("JSON.stringify([...document.querySelectorAll('.msg[data-cp]')].map(m => +m.dataset.cp))"),
+    await c.js(
+      "JSON.stringify([...document.querySelectorAll('.msg[data-cp]')].map(m => +m.dataset.cp))",
+    ),
   );
   console.log(`  checkpoints: ${ids.join(", ")}`);
   c.check(new Set(ids).size === ids.length, "one checkpoint id per line");
@@ -928,7 +960,9 @@ async function testRewind(c: Ctx): Promise<void> {
     "the server kept exactly the lines before the checkpoint",
   );
   const kept: number[] = JSON.parse(
-    await c.js("JSON.stringify([...document.querySelectorAll('.msg[data-cp]')].map(m => +m.dataset.cp))"),
+    await c.js(
+      "JSON.stringify([...document.querySelectorAll('.msg[data-cp]')].map(m => +m.dataset.cp))",
+    ),
   );
   c.check(
     JSON.stringify(kept) === JSON.stringify(ids.slice(0, 2)),
@@ -1035,10 +1069,12 @@ async function main(): Promise<number> {
   ws.close();
 
   const bad = c.results.filter((r) => !r[2]);
-  console.log("\n" + "=".repeat(60));
+  console.log(`\n${"=".repeat(60)}`);
   for (const name of args.tests) {
     const rows = c.results.filter((r) => r[0] === name);
-    console.log(`  ${name.padEnd(7)} ${String(rows.filter((r) => r[2]).length).padStart(2)}/${rows.length} ok`);
+    console.log(
+      `  ${name.padEnd(7)} ${String(rows.filter((r) => r[2]).length).padStart(2)}/${rows.length} ok`,
+    );
   }
   console.log(
     `RESULT: ${bad.length ? "FAIL" : "PASS"} (${c.results.length} checks, ${bad.length} failures)`,

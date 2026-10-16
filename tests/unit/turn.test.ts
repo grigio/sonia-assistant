@@ -4,10 +4,10 @@
  * whole full-duplex behaviour hangs on, and it had no test at all.
  */
 import { describe, expect, test } from "bun:test";
-import { Config } from "../../src/config";
 import type { LiveTranscription } from "../../src/clients/audiocpp";
-import { checkTurnEnd, realWords, type TurnEndAction } from "../../src/harness/turn";
+import { Config } from "../../src/config";
 import type { Utterance } from "../../src/harness/assistant";
+import { checkTurnEnd, realWords, type TurnEndAction } from "../../src/harness/turn";
 
 /** A `Utterance` with only the fields `checkTurnEnd` reads. */
 function utt(over: Partial<Utterance> = {}): Utterance {
@@ -69,12 +69,15 @@ describe("the silence gap", () => {
 });
 
 describe("DECISION_MODE", () => {
-  test("\"off\" never asks the LLM: the audio signals alone end the turn", () => {
+  test('"off" never asks the LLM: the audio signals alone end the turn', () => {
     const c = cfg({ decisionMode: "off" });
-    expect(at(utt({ partial: "Che ore sono" }), c, 1000)).toEqual({ kind: "end", reason: "silence" });
+    expect(at(utt({ partial: "Che ore sono" }), c, 1000)).toEqual({
+      kind: "end",
+      reason: "silence",
+    });
   });
 
-  test("\"auto\" asks only when nothing else finished the turn", () => {
+  test('"auto" asks only when nothing else finished the turn', () => {
     const c = cfg({ decisionMode: "auto" });
     expect(at(utt({ partial: "Che ore sono" }), c, 1000)).toEqual({
       kind: "ask",
@@ -87,7 +90,7 @@ describe("DECISION_MODE", () => {
     });
   });
 
-  test("\"always\" asks even on a confident score", () => {
+  test('"always" asks even on a confident score', () => {
     const c = cfg({ decisionMode: "always" });
     expect(at(utt({ partial: "Che ore sono", turnProb: 0.9 }), c, 1000)).toEqual({
       kind: "ask",
@@ -95,7 +98,7 @@ describe("DECISION_MODE", () => {
     });
   });
 
-  test("a trailing question/exclamation ends it as \"punctuation\" — the model already finished", () => {
+  test('a trailing question/exclamation ends it as "punctuation" — the model already finished', () => {
     expect(at(utt({ partial: "Che ore sono?" }), cfg(), 1000)).toEqual({
       kind: "end",
       reason: "punctuation",
@@ -161,7 +164,7 @@ describe("the judge's verdict", () => {
     expect(u.listenUntil).toBe(0);
   });
 
-  test("\"pending\" (the request is in flight) waits, whatever the clock says", () => {
+  test('"pending" (the request is in flight) waits, whatever the clock says', () => {
     const u = utt({ partial: "Che ore sono", decision: "pending", decisionText: "…" });
     expect(at(u, cfg(), 5000)).toEqual({ kind: "wait" });
   });

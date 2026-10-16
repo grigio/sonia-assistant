@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { spawnSync } from "node:child_process";
 /**
  * `bun run fetch-and-compile-audio.cpp` — fetch the latest audio.cpp **release** and
  * compile `audiocpp_server` from its source (the official prebuilt binaries are built
@@ -28,7 +29,6 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const REPO = "https://github.com/0xShug0/audio.cpp";
@@ -101,7 +101,9 @@ async function latestTag(): Promise<string> {
     }
     warn(`GitHub API answered HTTP ${r.status} — falling back to git ls-remote`);
   } catch (err) {
-    warn(`GitHub API unreachable (${err instanceof Error ? err.message : err}) — falling back to git ls-remote`);
+    warn(
+      `GitHub API unreachable (${err instanceof Error ? err.message : err}) — falling back to git ls-remote`,
+    );
   }
 
   const r = run(["git", "ls-remote", "--tags", "--refs", REPO], true);
@@ -128,7 +130,10 @@ function fetchSource(tag: string): void {
 
   const head = run(["git", "-C", VENDOR, "rev-parse", "HEAD"], true).out.trim();
   // fetch exactly this tag (works for shallow clones too); offline + already local → continue
-  const f = run(["git", "-C", VENDOR, "fetch", "--force", "origin", `refs/tags/${tag}:refs/tags/${tag}`], true);
+  const f = run(
+    ["git", "-C", VENDOR, "fetch", "--force", "origin", `refs/tags/${tag}:refs/tags/${tag}`],
+    true,
+  );
   if (!f.ok) {
     if (run(["git", "-C", VENDOR, "rev-parse", "--verify", `refs/tags/${tag}`], true).ok)
       warn(`git fetch failed (${f.out}) — the tag is local already, continuing offline`);
@@ -149,7 +154,7 @@ function fetchSource(tag: string): void {
           .split("\n")
           .slice(0, 5)
           .map((l) => `    ${l}`)
-          .join("\n")
+          .join("\n"),
     );
 
   info(`moving ${path.relative(ROOT, VENDOR)} ${dim(`(${head.slice(0, 8)} → ${tag})`)}`);
@@ -171,7 +176,7 @@ function vulkanWanted(): boolean {
   if (headers && glslc) return true;
   warn(
     `Vulkan toolchain not found (${!headers ? "no vulkan headers" : ""}${!headers && !glslc ? " and " : ""}${!glslc ? "no glslc" : ""}) → building CPU-only` +
-      `\n  ${dim("…set AUDIOCPP_VULKAN=ON to insist, and run with ASR_BACKEND=cpu (no iGPU offload)")}`
+      `\n  ${dim("…set AUDIOCPP_VULKAN=ON to insist, and run with ASR_BACKEND=cpu (no iGPU offload)")}`,
   );
   return false;
 }
@@ -182,16 +187,22 @@ function build(vulkan: boolean): number {
   const fresh = !fs.existsSync(path.join(BUILD, "CMakeCache.txt"));
   const cmakeArgs = ["-S", VENDOR, "-B", BUILD];
   if (fresh && onPath("ninja")) cmakeArgs.push("-G", "Ninja"); // an existing cache keeps its generator
-  cmakeArgs.push(
-    "-DCMAKE_BUILD_TYPE=Release",
-    `-DENGINE_ENABLE_VULKAN=${vulkan ? "ON" : "OFF"}`,
-  );
+  cmakeArgs.push("-DCMAKE_BUILD_TYPE=Release", `-DENGINE_ENABLE_VULKAN=${vulkan ? "ON" : "OFF"}`);
 
   info(`configuring ${dim(`(cmake ${cmakeArgs.join(" ")})`)}`);
   if (!run(["cmake", ...cmakeArgs]).ok) die("cmake configure failed");
   info(`building audiocpp_server ${dim("(incremental on re-runs)")}`);
-  if (!run(["cmake", "--build", BUILD, "--target", "audiocpp_server", "--parallel", String(os_cpus())])
-    .ok)
+  if (
+    !run([
+      "cmake",
+      "--build",
+      BUILD,
+      "--target",
+      "audiocpp_server",
+      "--parallel",
+      String(os_cpus()),
+    ]).ok
+  )
     die("build failed — see the compiler output above");
   return Date.now() - t0;
 }
@@ -246,8 +257,14 @@ async function main(): Promise<number> {
   fs.chmodSync(BIN, 0o755);
 
   const size = fs.statSync(BIN).size;
-  info(`${green("done")} ${path.relative(ROOT, BIN)} ${dim(`(${(size / 1024 / 1024).toFixed(0)} MiB, build ${human(elapsed)}, total ${human(Date.now() - t0)})`)}`);
-  info(dim(`scripts/start-audio-servers.sh picks it up automatically — override with AUDIOCPP_SERVER=${path.relative(ROOT, BIN)}`));
+  info(
+    `${green("done")} ${path.relative(ROOT, BIN)} ${dim(`(${(size / 1024 / 1024).toFixed(0)} MiB, build ${human(elapsed)}, total ${human(Date.now() - t0)})`)}`,
+  );
+  info(
+    dim(
+      `scripts/start-audio-servers.sh picks it up automatically — override with AUDIOCPP_SERVER=${path.relative(ROOT, BIN)}`,
+    ),
+  );
   return 0;
 }
 

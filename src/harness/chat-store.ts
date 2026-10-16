@@ -23,6 +23,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ChatMessage, ToolCall } from "../clients/llm";
+import { writeJsonAtomic } from "../util";
 
 /** One history message with the checkpoint id it had (what ⟲ on that line points at). */
 export type StoredEntry = { id: number; msg: ChatMessage };
@@ -39,8 +40,8 @@ function isToolCall(v: unknown): v is ToolCall {
   return (
     typeof c === "object" &&
     c !== null &&
-    typeof c["id"] === "string" &&
-    typeof (c["function"] as { name?: unknown } | undefined)?.name === "string"
+    typeof c.id === "string" &&
+    typeof (c.function as { name?: unknown } | undefined)?.name === "string"
   );
 }
 
@@ -100,11 +101,8 @@ export class ChatStore {
       if (id === undefined) continue; // unstamped = not checkpoint material
       entries.push({ id, msg });
     }
-    const json = JSON.stringify({ v: VERSION, entries });
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    const tmp = `${this.file}.tmp`;
-    fs.writeFileSync(tmp, json);
-    fs.renameSync(tmp, this.file);
+    writeJsonAtomic(this.file, { v: VERSION, entries });
   }
 
   /** The stored chat, or `null` when there is nothing usable to restore. */

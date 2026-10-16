@@ -20,16 +20,16 @@
  *   sonia-gtk4 install.sh       (system/user install: .desktop + icon + launcher)
  */
 
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { SoniaApp } from "./app";
 
 // Repo root — where a project .env would live. The packaged client (Arch
 // `sonia-gtk4`) runs from /usr/lib/sonia-gtk4, so it sets SONIA_GTK4_ROOT to
 // /etc/sonia-gtk4 where its own env file sits.
-const ROOT = process.env["SONIA_GTK4_ROOT"] ?? path.resolve(import.meta.dir, "..");
+const ROOT = process.env.SONIA_GTK4_ROOT ?? path.resolve(import.meta.dir, "..");
 
 /** HARNESS_URL (any shape) → `ws://host[:port]/ws`. */
 export function wsUrlFrom(raw: string): string {
@@ -40,15 +40,14 @@ export function wsUrlFrom(raw: string): string {
     u = new URL("http://127.0.0.1:8095");
   }
   const ws = new URL(u.toString());
-  ws.protocol =
-    u.protocol === "https:" || u.protocol === "wss:" ? "wss:" : "ws:";
+  ws.protocol = u.protocol === "https:" || u.protocol === "wss:" ? "wss:" : "ws:";
   if (!ws.pathname || ws.pathname === "/") ws.pathname = "/ws";
   return ws.toString();
 }
 
 /** LOCALE from the env, else the project `.env`, else Italian (the source catalogue). */
 export function resolveLocale(): string {
-  const env = process.env["LOCALE"];
+  const env = process.env.LOCALE;
   if (env === "it" || env === "en") return env;
   try {
     const dotenv = fs.readFileSync(path.join(ROOT, ".env"), "utf-8");
@@ -83,11 +82,9 @@ function portOpen(host: string, port: number): Promise<boolean> {
   });
 }
 
-const harnessUrl = process.env["HARNESS_URL"] ?? "http://127.0.0.1:8095";
+const harnessUrl = process.env.HARNESS_URL ?? "http://127.0.0.1:8095";
 {
-  const u = new URL(
-    harnessUrl.includes("://") ? harnessUrl : `http://${harnessUrl}`,
-  );
+  const u = new URL(harnessUrl.includes("://") ? harnessUrl : `http://${harnessUrl}`);
   if (!(await portOpen(u.hostname, Number(u.port || 8095)))) {
     console.error(
       `No harness answering at ${harnessUrl} — start the backends first:\n` +
@@ -102,11 +99,11 @@ const aecPresent = ecNodesPresent();
 const app = new SoniaApp({
   wsUrl: wsUrlFrom(harnessUrl),
   locale: resolveLocale(),
-  micTarget: process.env["MIC_TARGET"] ?? (aecPresent ? "fd_ec_source" : ""),
-  spkTarget: process.env["SPK_TARGET"] ?? (aecPresent ? "fd_ec_sink" : ""),
+  micTarget: process.env.MIC_TARGET ?? (aecPresent ? "fd_ec_source" : ""),
+  spkTarget: process.env.SPK_TARGET ?? (aecPresent ? "fd_ec_sink" : ""),
   aecSource: aecPresent ? "fd_ec_source" : "",
   aecSink: aecPresent ? "fd_ec_sink" : "",
-  aecDefault: process.env["SONIA_AEC"] !== "0" && aecPresent,
+  aecDefault: process.env.SONIA_AEC !== "0" && aecPresent,
 });
 
 await app.run();

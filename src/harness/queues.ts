@@ -1,6 +1,7 @@
 /** Async primitives: an unbounded FIFO, a monotonic clock, cooperative cancellation. */
 
 import { abortError } from "../util";
+
 export { abortError } from "../util";
 
 /** Unbounded FIFO; a `null` item works as the poison pill (end-of-stream marker). */

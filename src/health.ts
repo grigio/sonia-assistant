@@ -15,7 +15,7 @@ export type Target = { name: string; url: string };
 
 /** The endpoint every audio.cpp server answers; `scripts/runtime-check.ts` reads it too. */
 export function healthUrl(base: string): string {
-  return base.replace(/\/+$/, "") + "/health";
+  return `${base.replace(/\/+$/, "")}/health`;
 }
 
 /**

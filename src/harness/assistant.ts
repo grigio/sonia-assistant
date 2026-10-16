@@ -6,32 +6,31 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { Config } from "../config";
-import type { HistoryMessage, ServerEvent, StateName, TaskInfo } from "../events";
-import { t, type ViaKey } from "../i18n";
-import { estimateCharsPerToken, historyBudget, type ContextState } from "../context";
-import { TTS, SmartTurn } from "../clients/audiocpp";
-import { LLM, allowGateRetries, type ChatMessage, type StreamItem, type ToolCall } from "../clients/llm";
-import { ToolMarkupFilter } from "../clients/toolmarkup";
-import { toolEnd, toolStart, type ToolPayload } from "../clients/toolcards";
-import { Player } from "../audio/player";
 import type { MicSource } from "../audio/mic";
-import { GATE_EXEMPT_TOOLS, Tools, argSummary, toolDescription } from "../tools";
-import { Skills, type SkillInfo } from "../skills";
-import { SileroVAD } from "../vad";
-import { healthUrl, llmHealthUrl, probeAll, type Target } from "../health";
-import { SentenceSplitter } from "./sentences";
-import { ChatStore, type RestoredChat } from "./chat-store";
-import { classifyYesNo } from "./text";
-import { Logger } from "../log";
+import { Player } from "../audio/player";
+import { SmartTurn, TTS } from "../clients/audiocpp";
 import {
-  AsyncQueue,
-  abortableIter,
-  abortableSleep,
-  isAbortError,
-  now,
-  withAbort,
-} from "./queues";
+  allowGateRetries,
+  type ChatMessage,
+  LLM,
+  type StreamItem,
+  type ToolCall,
+} from "../clients/llm";
+import { type ToolPayload, toolEnd, toolStart } from "../clients/toolcards";
+import { ToolMarkupFilter } from "../clients/toolmarkup";
+import type { Config } from "../config";
+import { type ContextState, estimateCharsPerToken, historyBudget } from "../context";
+import type { HistoryMessage, ServerEvent, StateName, TaskInfo } from "../events";
+import { healthUrl, llmHealthUrl, probeAll, type Target } from "../health";
+import { t, type ViaKey } from "../i18n";
+import { Logger } from "../log";
+import { type SkillInfo, Skills } from "../skills";
+import { argSummary, GATE_EXEMPT_TOOLS, Tools, toolDescription } from "../tools";
+import { SileroVAD } from "../vad";
+import { ChatStore, type RestoredChat } from "./chat-store";
+import { AsyncQueue, abortableIter, abortableSleep, isAbortError, now, withAbort } from "./queues";
+import { SentenceSplitter } from "./sentences";
+import { classifyYesNo } from "./text";
 
 export type Utterance = {
   gen: number;
@@ -115,10 +114,7 @@ const HEALTH_TIMEOUT_MS = 2_000;
 function mergeable(last: ChatMessage, msg: ChatMessage): boolean {
   if ((msg.role !== "user" && msg.role !== "assistant") || last.role !== msg.role) return false;
   return (
-    !last.tool_calls?.length &&
-    !msg.tool_calls?.length &&
-    !last.tool_call_id &&
-    !msg.tool_call_id
+    !last.tool_calls?.length && !msg.tool_calls?.length && !last.tool_call_id && !msg.tool_call_id
   );
 }
 
@@ -198,7 +194,7 @@ export class Assistant {
   /** Header context bar: tokens of the last LLM request (prompt + completion) / n_ctx. */
   contextUsed = 0;
   contextTotal = 0;
-  private ctxKey = "";   // leg+model the cached `contextTotal` was resolved for
+  private ctxKey = ""; // leg+model the cached `contextTotal` was resolved for
 
   llm!: LLM;
   tts!: TTS;
@@ -305,7 +301,8 @@ export class Assistant {
   setVoice(name: string): void {
     const voices = this.voiceList();
     const v = String(name ?? "").trim();
-    if (!v || !voices.includes(v)) {          // never send a name the pack does not have
+    if (!v || !voices.includes(v)) {
+      // never send a name the pack does not have
       this.log(`⚠ unknown voice: ${v || "(empty)"}`);
       this.emit({ type: "voices", voices, current: this.cfg.ttsVoice, rate: this.tts?.rate });
       return;
@@ -321,7 +318,7 @@ export class Assistant {
     }
     this.log(`🔊 TTS voice → ${v}  (${this.tts?.rate ?? 24000} Hz)`);
     this.emit({ type: "voices", voices, current: v, rate: this.tts?.rate });
-    void this.tts?.warmVoice();               // the preset loads now, not mid-sentence
+    void this.tts?.warmVoice(); // the preset loads now, not mid-sentence
   }
 
   // ── setup ──
@@ -329,25 +326,29 @@ export class Assistant {
   async start(): Promise<void> {
     this.logger.verbose = this.cfg.debug;
     this.llm = new LLM(this.cfg);
-    this.restoreChat();       // the conversation of the previous run, ids and all
-    this.applySavedVoice();   // the voice picked in the drawer last time, if the pack has it
+    this.restoreChat(); // the conversation of the previous run, ids and all
+    this.applySavedVoice(); // the voice picked in the drawer last time, if the pack has it
     this.tts = new TTS(this.cfg.ttsUrl, this.cfg.ttsModel, this.cfg.ttsVoice);
     this.turn = new SmartTurn(this.cfg.turnUrl, this.cfg.turnModel);
     const skills = new Skills({ dir: this.cfg.skillsDir, dataDir: this.cfg.dataDir });
     this.skills = skills;
     this.tools = new Tools({
       dataDir: this.cfg.dataDir,
-      announce: (text, key) => this.announce(text, key),
-      withdraw: (key) => this.withdrawAnnouncements(key),
+      announce: (text, key) => {
+        this.announce(text, key);
+      },
+      withdraw: (key) => {
+        this.withdrawAnnouncements(key);
+      },
       approve: (c, r) => this.requestApproval(c, r),
       emit: (ev) => this.emit(ev as ServerEvent),
       cmdMode: this.cfg.cmdMode,
       cmdTimeoutS: this.cfg.cmdTimeoutS,
-      epoch: () => this.epoch,          // lets Tools drop its late events after a 🧹
-      locale: this.cfg.locale,          // a tool's result is shown on its card too
-      skills,                           // list_skills / read_skill + the trusted skills dir
-      history: () => this.history,      // "is that SKILL.md already in the context?"
-      log: (m) => this.log(m),          // one English line per watch check (logs never switch)
+      epoch: () => this.epoch, // lets Tools drop its late events after a 🧹
+      locale: this.cfg.locale, // a tool's result is shown on its card too
+      skills, // list_skills / read_skill + the trusted skills dir
+      history: () => this.history, // "is that SKILL.md already in the context?"
+      log: (m) => this.log(m), // one English line per watch check (logs never switch)
     });
     const skillRows = skills.list();
     this.log(
@@ -384,9 +385,9 @@ export class Assistant {
       // Prime the judge's own prefix too, so the first real pause answers warm. A
       // failing judge only degrades turn-taking (decide() falls back to «speak»),
       // so a warning, never a fatal startup error.
-      this.llm.warmupJudge(this.decisionPrompt).catch((e) =>
-        this.log(`⚠ judge warmup failed: ${e instanceof Error ? e.message : e}`),
-      ),
+      this.llm
+        .warmupJudge(this.decisionPrompt)
+        .catch((e) => this.log(`⚠ judge warmup failed: ${e instanceof Error ? e.message : e}`)),
     ]);
     this.log(`TTS  ${this.cfg.ttsUrl}  voice=${this.cfg.ttsVoice}  ${rate} Hz`);
     this.log(
@@ -525,7 +526,9 @@ export class Assistant {
       for (const { name, url } of targets) {
         if (isDown.has(name) === wasDown.has(name)) continue;
         const what = name === "llm" ? "LLM" : "audio server";
-        this.log(isDown.has(name) ? `⚠ ${what} down: ${name} ${url}` : `✅ ${what} back: ${name} ${url}`);
+        this.log(
+          isDown.has(name) ? `⚠ ${what} down: ${name} ${url}` : `✅ ${what} back: ${name} ${url}`,
+        );
       }
       this.healthDown = down;
       this.refreshState();
@@ -586,9 +589,9 @@ export class Assistant {
       // without DECISION_* the judge follows the conversation's model: its freshly
       // loaded prefix needs priming again (warning only — same policy as startup)
       if (!this.llm.judgeDedicated)
-        this.llm.warmupJudge(this.decisionPrompt).catch((e) =>
-          this.log(`⚠ judge warmup failed: ${e instanceof Error ? e.message : e}`),
-        );
+        this.llm
+          .warmupJudge(this.decisionPrompt)
+          .catch((e) => this.log(`⚠ judge warmup failed: ${e instanceof Error ? e.message : e}`));
     }
     void this.syncContext(true); // a new model → a new context window (or the old one back)
     this.refreshState();
@@ -602,7 +605,7 @@ export class Assistant {
     let resolveFn: (ok: boolean) => void = () => {};
     const promise = new Promise<boolean>((res) => (resolveFn = res));
     this.pendingApproval = { id, command, resolve: resolveFn };
-    this.log(`   ❓ approve command? $ ${command}` + (reason ? `   (${reason})` : ""));
+    this.log(`   ❓ approve command? $ ${command}${reason ? `   (${reason})` : ""}`);
     this.emit({ type: "command_request", id, command, reason });
     if (this.sentences !== null) {
       await this.sentences.push(t(this.cfg.locale, "spoken.approveCommand"));
@@ -641,12 +644,13 @@ export class Assistant {
     // the chat line follows LOCALE, the log line is always English (logs never switch language)
     const shown = viaKey ? t(this.cfg.locale, viaKey) : viaText;
     const logged = viaKey ? t("en", viaKey) : viaText;
-    this.log(`   ${ok ? "✅ approved" : "❌ denied"}${logged ? " " + logged : ""}: $ ${pa.command}`);
+    this.log(
+      `   ${ok ? "✅ approved" : "❌ denied"}${logged ? ` ${logged}` : ""}: $ ${pa.command}`,
+    );
     this.emit({
       type: "event",
       text:
-        t(this.cfg.locale, ok ? "evt.cmdApproved" : "evt.cmdDenied") +
-        (shown ? ` (${shown})` : ""),
+        t(this.cfg.locale, ok ? "evt.cmdApproved" : "evt.cmdDenied") + (shown ? ` (${shown})` : ""),
     });
     resolve(ok);
     return true;
@@ -682,9 +686,9 @@ export class Assistant {
       this.utt = null;
     }
     this.history = [];
-    this.persistChat();   // 🧹 empties the file too: a restart must not resurrect the chat
+    this.persistChat(); // 🧹 empties the file too: a restart must not resurrect the chat
     this.pendingPrefix = "";
-    this.contextUsed = 0;   // the conversation is empty again: the bar goes back to zero
+    this.contextUsed = 0; // the conversation is empty again: the bar goes back to zero
     this.emitContext();
     if (this.cfg.llmViaPi) this.llm.resetSession(); // pi remembers too: fresh session
     this.vad?.reset();
@@ -780,7 +784,7 @@ export class Assistant {
   /** A finished LLM request: prompt + completion is the context it just occupied. */
   private onUsage(prompt: number, completion: number): void {
     const used = Math.round(prompt) + Math.round(completion);
-    if (used <= 0) return;               // provider reported nothing → keep the last real figure
+    if (used <= 0) return; // provider reported nothing → keep the last real figure
     this.contextUsed = used;
     // …and the tokenizer's own verdict on the prompt we just measured in chars
     if (prompt > 0) this.lastPromptTokens = Math.round(prompt);
@@ -813,13 +817,13 @@ export class Assistant {
     if (saved === null) return;
     this.history = saved.entries.map((e) => e.msg);
     for (const e of saved.entries) this.ids.set(e.msg, e.id);
-    this.msgSeq = Math.max(this.msgSeq, saved.maxId);   // new ids keep being unique
-    this.dropOpenTools();   // a run that died mid-exchange leaves a call with no answer
+    this.msgSeq = Math.max(this.msgSeq, saved.maxId); // new ids keep being unique
+    this.dropOpenTools(); // a run that died mid-exchange leaves a call with no answer
     this.log(
       `💾 chat restored: ${this.history.length} message(s), ` +
         `${this.chatLines().length} chat line(s)`,
     );
-    this.persistChat();     // the pruned version is what stays on disk
+    this.persistChat(); // the pruned version is what stays on disk
   }
 
   /** Write the conversation. A no-op while there is no store (see `chatStore`). */
@@ -872,8 +876,8 @@ export class Assistant {
   addMessage(msg: ChatMessage): number {
     const last = this.history[this.history.length - 1];
     if (last && msg.role === "assistant" && mergeable(last, msg)) {
-      last.content = String(last.content ?? "") + " " + String(msg.content ?? "");
-      this.persistChat();   // its text changed — the file keeps what the model will get
+      last.content = `${String(last.content ?? "")} ${String(msg.content ?? "")}`;
+      this.persistChat(); // its text changed — the file keeps what the model will get
       return this.history.length - 1;
     }
     this.history.push(this.stamp(msg));
@@ -919,7 +923,7 @@ export class Assistant {
         if (this.history[j]!.role === "tool") done++;
       }
       if (done >= m.tool_calls.length) return; // every call got its result
-      this.history.length = i;                 // half an exchange → drop it whole
+      this.history.length = i; // half an exchange → drop it whole
       this.persistChat();
       return;
     }
@@ -961,7 +965,7 @@ export class Assistant {
     }
     if (this.history.length < before) {
       this.log(`✂ history ${before} → ${this.history.length} messages (context window)`);
-      this.persistChat();   // the trimmed history is the one a restart must come back to
+      this.persistChat(); // the trimmed history is the one a restart must come back to
     }
   }
 
@@ -1011,7 +1015,7 @@ export class Assistant {
       this.utt.asr.abort();
       this.utt = null;
     }
-    this.pendingPrefix = "";   // half a sentence the user never finished: it goes with it
+    this.pendingPrefix = ""; // half a sentence the user never finished: it goes with it
     this.history.splice(0, this.history.length, ...keep);
     // the cut took the results of the target's own tool calls with it: those calls go too
     // (a `tool_calls` message with no answer is not something a template accepts) — but
@@ -1026,7 +1030,7 @@ export class Assistant {
       this.history[this.history.length - 1]!.role === "user" &&
       this.history[this.history.length - 1] !== target
     ) {
-      this.history.length--;   // …and no dangling question — but never the clicked line
+      this.history.length--; // …and no dangling question — but never the clicked line
     }
     // pi's own session cannot be cut: move on to conv<n+1> and re-seed it with what is left
     if (this.cfg.llmViaPi) this.llm.rewindSession();
@@ -1034,7 +1038,7 @@ export class Assistant {
     // `contextUsed` stays as it is: it is what the *last request* put in the KV cache, and
     // the size of the next prompt is unknowable until it is sent (it corrects itself then)
     this.log(`⟲ history ${before} → ${this.history.length} messages (rewound to #${id})`);
-    this.persistChat();   // ⟲ must survive a restart like the rest of the conversation
+    this.persistChat(); // ⟲ must survive a restart like the rest of the conversation
     this.refreshState();
     return true;
   }
@@ -1083,7 +1087,7 @@ export class Assistant {
       },
       (err) => {
         if (isAbortError(err)) return;
-        if (resp.controller.signal.aborted) return;   // cancelled (or 🧹): no stale warning line
+        if (resp.controller.signal.aborted) return; // cancelled (or 🧹): no stale warning line
         this.log(`[response] ${String(err)}`);
         this.emit({ type: "event", text: `⚠ ${err}` });
         if (this.resp === resp) this.resp = null;
@@ -1105,35 +1109,37 @@ export class Assistant {
       // three outcomes on the card and in the log: ⚠ ran and failed, ⛔ refused by the
       // gate (never ran), ⚙ ran fine — the middle one used to be logged as ⚙ too
       const mark = ev.error ? "⚠" : ev.blocked ? "⛔" : "⚙";
-      const head = `   ${mark} ${name} → ${String(ev.result ?? "").replace(/\n/g, " ").slice(0, 120)}`;
+      const head = `   ${mark} ${name} → ${String(ev.result ?? "")
+        .replace(/\n/g, " ")
+        .slice(0, 120)}`;
       this.log(head + (ev.info ? `   (${ev.info})` : ""));
     }
     this.emit({ type: "tool", ...ev });
   }
   private async runResponse(resp: Response): Promise<void> {
     const signal = resp.controller.signal;
-    const epoch = this.epoch;           // 🧹 mid-turn → everything below is old-chat data
+    const epoch = this.epoch; // 🧹 mid-turn → everything below is old-chat data
     const stale = () => epoch !== this.epoch || signal.aborted;
     const sentences = new AsyncQueue<string | null>();
     const ttsCtl = new AbortController();
     const ttsTask = this.ttsWorker(sentences, ttsCtl.signal);
     // The handler has to be attached *here*: a TTS request can be refused while the LLM
     // is still streaming, and Bun exits on a rejection nobody has subscribed to yet — a
-    // dead :8092 killed the whole harness instead of failing this one response.
+    // dead :8092 killed the whole harness instead of failing this one response. (The
+    // belt-and-braces guard for every other task is `installCrashGuards` in src/log.ts.)
     let ttsError: unknown = null;
     const ttsDone = ttsTask.catch((e) => {
       ttsError = e;
     });
     try {
       this.dropOpenTools(); // a turn cut mid-exchange must not go out in the request
-      this.fitHistory();     // …and the whole history has to fit the window
+      this.fitHistory(); // …and the whole history has to fit the window
       const messages: ChatMessage[] = [
         { role: "system", content: this.systemPrompt },
         ...forModel(this.history), // two kept questions in a row are one turn *here* only
       ];
       // in pi mode pi brings its own tools (bash, read, edit…)
-      const tools =
-        this.cfg.llmEnableTools && !this.cfg.llmViaPi ? this.tools.schemas() : null;
+      const tools = this.cfg.llmEnableTools && !this.cfg.llmViaPi ? this.tools.schemas() : null;
       this.sentences = sentences;
       const splitter = new SentenceSplitter();
       // a tool call written as *text* (no tools on offer) must never be spoken nor kept
@@ -1172,7 +1178,10 @@ export class Assistant {
         let textRound = "";
         let calls: ToolCall[] | null = null;
         let reasoningStarted = false; // one blank line before each extra round's thinking
-        for await (const item of abortableIter(this.llm.stream(messages, offer), signal) as AsyncGenerator<StreamItem>) {
+        for await (const item of abortableIter(
+          this.llm.stream(messages, offer, signal),
+          signal,
+        ) as AsyncGenerator<StreamItem>) {
           if (item.kind === "reasoning") {
             if (stale()) return;
             if (!reasoningStarted) {
@@ -1232,7 +1241,7 @@ export class Assistant {
           const result = gated
             ? toolGated(this.cfg)
             : await this.tools.call(name, raw, signal, resp.userText);
-          if (stale()) return;          // 🧹 while it ran: its result must not reach the new chat
+          if (stale()) return; // 🧹 while it ran: its result must not reach the new chat
           // what this answer is *already* doing — the judge needs it to see that the next
           // proposal continues the same request instead of starting something of its own
           if (!gated) doing.push(`${name} ${argSummary(raw)} → ${resultHead(result)}`);
@@ -1255,9 +1264,7 @@ export class Assistant {
         }
       }
       if (markup.seen) {
-        this.log(
-          `⚠ tool-call markup in the model's text — dropped ${markup.droppedChars} chars`,
-        );
+        this.log(`⚠ tool-call markup in the model's text — dropped ${markup.droppedChars} chars`);
       }
       for (const s of splitter.flush()) sentences.push(s);
       let text = SentenceSplitter.clean(resp.fullText);
@@ -1272,7 +1279,7 @@ export class Assistant {
       sentences.push(null);
       this.sentences = null;
       await ttsDone;
-      if (stale()) return;              // cleaned/interrupted while TTS played → keep it out of history
+      if (stale()) return; // cleaned/interrupted while TTS played → keep it out of history
       if (ttsError !== null) throw ttsError; // → responseTaskDone: log + ⚠ line + turn cleared
       const answerIndex = this.addMessage({ role: "assistant", content: text });
       resp.historyIndex = answerIndex;
@@ -1405,10 +1412,7 @@ export class Assistant {
     }
   }
 
-  private async ttsWorker(
-    q: AsyncQueue<string | null>,
-    signal: AbortSignal,
-  ): Promise<void> {
+  private async ttsWorker(q: AsyncQueue<string | null>, signal: AbortSignal): Promise<void> {
     for (;;) {
       // withAbort: an abort while the queue is empty must end the worker — a bare
       // `q.get()` waits forever and the response task would never settle
@@ -1445,7 +1449,9 @@ export class Assistant {
       voice_to_audio_ms: lat,
       voice_to_first_token_ms: ttft,
     });
-    this.log(`   ⏱ last voice → first token ${ttft.toFixed(0)} ms → first audio ${lat.toFixed(0)} ms`);
+    this.log(
+      `   ⏱ last voice → first token ${ttft.toFixed(0)} ms → first audio ${lat.toFixed(0)} ms`,
+    );
     this.emit({
       type: "latency",
       first_token_ms: Math.round(ttft),
@@ -1455,7 +1461,7 @@ export class Assistant {
 
   private onIdle(): void {
     const r = this.resp;
-    if (r !== null && r.generationDone && !this.player.paused) this.finishResponse(r);
+    if (r?.generationDone && !this.player.paused) this.finishResponse(r);
   }
 
   finishResponse(resp: Response): void {
@@ -1487,14 +1493,13 @@ export class Assistant {
     }
     this.dropOpenTools(); // aborted between a tool call and its result
     const spoken = resp.spoken.join(" ").trim();
-    const note = interrupted ? " … " + t(this.cfg.locale, "hist.interrupted") : "";
-    const content =
-      (spoken + note).trim() || t(this.cfg.locale, "hist.interruptedQuiet");
+    const note = interrupted ? ` … ${t(this.cfg.locale, "hist.interrupted")}` : "";
+    const content = (spoken + note).trim() || t(this.cfg.locale, "hist.interruptedQuiet");
     if (resp.historyIndex !== null && resp.historyIndex < this.history.length) {
       this.history[resp.historyIndex]!.content = content;
-      this.persistChat();   // its text changed ("… [interrotto dall'utente]")
+      this.persistChat(); // its text changed ("… [interrotto dall'utente]")
     } else {
-      this.addMessage({ role: "assistant", content });   // …and persists it itself
+      this.addMessage({ role: "assistant", content }); // …and persists it itself
     }
   }
 
@@ -1513,7 +1518,8 @@ export class Assistant {
    */
   announce(text: string, key = ""): void {
     const queued = key ? this.announcements.find((a) => a.key === key) : null;
-    if (queued) queued.text = text;      // same task: the waiting line is the newest value
+    if (queued)
+      queued.text = text; // same task: the waiting line is the newest value
     else this.announcements.push({ key, text });
   }
 
@@ -1557,7 +1563,7 @@ export class Assistant {
             q.push(text);
             q.push(null);
             await this.ttsWorker(q, controller.signal);
-            if (controller.signal.aborted) return;   // 🧹 while it rang → not into the new chat
+            if (controller.signal.aborted) return; // 🧹 while it rang → not into the new chat
             const ringIndex = this.addMessage({ role: "assistant", content: text });
             resp.historyIndex = ringIndex;
             resp.generationDone = true;

@@ -38,7 +38,9 @@ describe(".env.example", () => {
   });
 
   test("names no knob Config does not have", () => {
-    const known = new Set(Object.keys(new Config() as unknown as Record<string, unknown>).map(envName));
+    const known = new Set(
+      Object.keys(new Config() as unknown as Record<string, unknown>).map(envName),
+    );
     const stray = [...documented].filter((name) => !known.has(name));
     // ASR_PRECISION / ASR_GGUF / LLM_MODEL_PATH are read by scripts/, not by Config:
     // they are documented on purpose and belong here as exceptions.

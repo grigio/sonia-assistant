@@ -26,15 +26,15 @@ body
 describe("parseFrontmatter", () => {
   test("plain key: value pairs", () => {
     const fm = parseFrontmatter(FM);
-    expect(fm["name"]).toBe("demo");
-    expect(fm["description"]).toBe("One line description.");
+    expect(fm.name).toBe("demo");
+    expect(fm.description).toBe("One line description.");
   });
 
   test("block scalars are folded into one line", () => {
     const fm = parseFrontmatter(BLOCK_FM);
-    expect(fm["name"]).toBe("fix-wifi");
-    expect(fm["description"]).toBe("First line of a block scalar second line of it, wrapped.");
-    expect(fm["license"]).toBe("MIT");
+    expect(fm.name).toBe("fix-wifi");
+    expect(fm.description).toBe("First line of a block scalar second line of it, wrapped.");
+    expect(fm.license).toBe("MIT");
   });
 
   test("no frontmatter → empty object", () => {
@@ -50,7 +50,7 @@ describe("helpers", () => {
 
   test("clip keeps short text and marks the cut", () => {
     expect(clip("short", 100)).toBe("short");
-    expect(clip("x".repeat(20), 10)).toBe("x".repeat(10) + " …");
+    expect(clip("x".repeat(20), 10)).toBe(`${"x".repeat(10)} …`);
   });
 });
 
@@ -67,13 +67,13 @@ describe("Skills store", () => {
   test("lists the skills of the dir, all active by default", () => {
     const s = new Skills({ dir, dataDir });
     const list = s.list();
-    expect(list.map((k) => k.name)).toEqual(["demo", "fix-wifi"]);  // frontmatter name wins
+    expect(list.map((k) => k.name)).toEqual(["demo", "fix-wifi"]); // frontmatter name wins
     expect(list.every((k) => k.active)).toBe(true);
   });
 
   test("the UI choice is persisted and read back by a fresh instance", () => {
     const s = new Skills({ dir, dataDir });
-    const after = s.setActive(["alpha"]);   // by *directory* name, as the UI sends it
+    const after = s.setActive(["alpha"]); // by *directory* name, as the UI sends it
     expect(after.find((k) => k.name === "demo")!.active).toBe(true);
     expect(after.find((k) => k.name === "fix-wifi")!.active).toBe(false);
 
@@ -98,7 +98,7 @@ describe("Skills store", () => {
     const s = new Skills({ dir, dataDir });
     expect(s.read("..")).toContain("Unknown skill");
     expect(s.read(".")).toContain("Unknown skill");
-    expect(s.read(" .. ")).toContain("Unknown skill");   // trimmed, then refused
+    expect(s.read(" .. ")).toContain("Unknown skill"); // trimmed, then refused
     expect(s.read("../skills/alpha")).toContain("Unknown skill");
     expect(fs.readFileSync(path.join(root, "SKILL.md"), "utf-8")).toBe("OUTSIDE"); // untouched
     // a real skill still reads as before

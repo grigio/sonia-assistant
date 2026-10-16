@@ -23,9 +23,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Config } from "../../src/config";
+import type { TaskInfo } from "../../src/events";
 import { Assistant } from "../../src/harness/assistant";
 import { Tools } from "../../src/tools";
-import type { TaskInfo } from "../../src/events";
 
 type Ev = { type: string; tasks?: TaskInfo[]; status?: string; id?: number };
 
@@ -41,9 +41,7 @@ async function until(cond: () => boolean, what: string, ms = 4000): Promise<void
   }
 }
 
-function fixture(
-  opts: { locale?: "it" | "en"; timeoutS?: number; minWatchS?: number } = {},
-) {
+function fixture(opts: { locale?: "it" | "en"; timeoutS?: number; minWatchS?: number } = {}) {
   const dir = tmp();
   const seen: Ev[] = [];
   const rings: string[] = [];
@@ -91,12 +89,12 @@ describe("the timer chip", () => {
       kind: "timer",
       label: "caffè",
     });
-    expect(tools.tasks()).toEqual([]);        // the ✕ is answered with an empty list
-    expect(lastTasks()).toEqual([]);          // …over the wire too
-    expect(tools.cancelTask("timer-1")).toBeNull();  // a second ✕ has nothing left to hit
+    expect(tools.tasks()).toEqual([]); // the ✕ is answered with an empty list
+    expect(lastTasks()).toEqual([]); // …over the wire too
+    expect(tools.cancelTask("timer-1")).toBeNull(); // a second ✕ has nothing left to hit
 
     await sleep(1500);
-    expect(rings).toEqual([]);                // it really never rang
+    expect(rings).toEqual([]); // it really never rang
     done();
   });
 
@@ -109,7 +107,7 @@ describe("the timer chip", () => {
     // as a failure. `until` waits as long as it takes and fails only when it cannot.
     await until(() => rings.length >= 1, "the timer to ring");
     expect(tools.tasks()).toEqual([]);
-    expect(lastTasks()).toEqual([]);          // the ring took the chip with it
+    expect(lastTasks()).toEqual([]); // the ring took the chip with it
     expect(rings).toEqual(["Il caffè è scaduto."]);
     expect(seen.map((e) => e.type)).toEqual(["tasks", "tasks"]);
     done();
@@ -157,20 +155,18 @@ describe("the chip of a running command", () => {
     await until(() => tools.tasks().length === 1, "the command to be listed");
 
     const t0 = Date.now();
-    expect(tools.cancelTask("cmd-1")).toMatchObject({ kind: "command", label: "sleep 5 && echo NEVER" });
-    expect(tools.tasks()).toEqual([]);        // gone from the banner straight away
+    expect(tools.cancelTask("cmd-1")).toMatchObject({
+      kind: "command",
+      label: "sleep 5 && echo NEVER",
+    });
+    expect(tools.tasks()).toEqual([]); // gone from the banner straight away
     const out = await run;
-    expect(Date.now() - t0).toBeLessThan(4000);   // no waiting for the 5 s sleep
+    expect(Date.now() - t0).toBeLessThan(4000); // no waiting for the 5 s sleep
 
     expect(out).toContain("Command cancelled by the user");
-    expect(out).not.toContain("NEVER");       // the process group really was killed
+    expect(out).not.toContain("NEVER"); // the process group really was killed
     // the card still gets its own line, and the banner's last word is "empty"
-    expect(seen.map((e) => e.type)).toEqual([
-      "command_start",
-      "tasks",
-      "tasks",
-      "command_result",
-    ]);
+    expect(seen.map((e) => e.type)).toEqual(["command_start", "tasks", "tasks", "command_result"]);
     expect(seen.at(-1)!.status).toBe("cancelled");
     done();
   });
@@ -180,7 +176,7 @@ describe("the chip of a running command", () => {
     await tools.call("set_timer", JSON.stringify({ seconds: 60, label: "caffè" }));
     const before = seen.length;
     expect(tools.cancelTask("timer-404")).toBeNull();
-    expect(seen.length).toBe(before);         // no event for a ✕ that hit nothing
+    expect(seen.length).toBe(before); // no event for a ✕ that hit nothing
     expect(tools.tasks()).toHaveLength(1);
     done();
   });
@@ -196,7 +192,7 @@ describe("several tasks at once", () => {
 
     const list = tools.tasks();
     expect(list.map((t) => t.label)).toEqual(["breve", "sleep 3", "lungo"]);
-    expect(new Set(list.map((t) => t.id)).size).toBe(3);   // three chips, three ids
+    expect(new Set(list.map((t) => t.id)).size).toBe(3); // three chips, three ids
 
     for (const id of list.map((t) => t.id)) tools.cancelTask(id);
     await run;
@@ -231,7 +227,7 @@ describe("the watch chip — a check repeated at an interval, forever", () => {
     expect(said).toContain("battery");
 
     expect(tools.tasks()).toMatchObject([{ id: "watch-1", kind: "watch", label: "battery" }]);
-    expect(tools.taskLocale("watch-1")).toBe("en");   // its checks speak in the request's language
+    expect(tools.taskLocale("watch-1")).toBe("en"); // its checks speak in the request's language
     await until(() => rings.length >= 2, "two checks reported");
     expect(rings[0]).toBe("Check of battery: 42%");
     // the chip counts down to the NEXT check: it is never stuck at a deadline it passed
@@ -245,7 +241,7 @@ describe("the watch chip — a check repeated at an interval, forever", () => {
     expect(tools.tasks()).toEqual([]);
     const saidAfter = rings.length;
     await sleep(600);
-    expect(rings.length).toBe(saidAfter);   // the loop really ended, no more checks
+    expect(rings.length).toBe(saidAfter); // the loop really ended, no more checks
     done();
   });
 
@@ -267,13 +263,13 @@ describe("the watch chip — a check repeated at an interval, forever", () => {
     // "nothing happened" across a 200 ms poll period, so the window is three periods
     // (600 ms) — a loaded box that stretches a tick cannot flip the result.
     await sleep(600);
-    expect(rings).toEqual([]);            // still pending: nothing worth saying
+    expect(rings).toEqual([]); // still pending: nothing worth saying
 
     fs.writeFileSync(flag, "done ✓\n");
     await until(() => rings.length >= 1, "the condition to be announced");
     expect(rings[0]).toBe("Heads-up, download: done ✓");
 
-    await sleep(600);                     // it keeps matching: it does NOT say it again
+    await sleep(600); // it keeps matching: it does NOT say it again
     expect(rings).toHaveLength(1);
     tools.cancelTask("watch-1");
     done();
@@ -290,10 +286,10 @@ describe("the watch chip — a check repeated at an interval, forever", () => {
     const inventory = await tools.call("stop_watch", "{}");
     expect(inventory).toContain("download");
     expect(inventory).toContain("battery level");
-    expect(tools.tasks()).toHaveLength(2);         // listing is not stopping
+    expect(tools.tasks()).toHaveLength(2); // listing is not stopping
 
     const stopped = await tools.call("stop_watch", JSON.stringify({ label: "batt" }));
-    expect(stopped).toContain("battery level");    // a fragment is enough
+    expect(stopped).toContain("battery level"); // a fragment is enough
     expect(tools.tasks().map((t) => t.label)).toEqual(["download"]);
 
     const miss = await tools.call("stop_watch", JSON.stringify({ label: "nothing" }));
@@ -333,13 +329,13 @@ describe("the watch chip — a check repeated at an interval, forever", () => {
     );
     assistantOver(tools).resetConversation();
     expect(tools.tasks()).toHaveLength(1);
-    tools.close();                        // the process is going away
+    tools.close(); // the process is going away
     expect(tools.tasks()).toEqual([]);
     done();
   });
 
   test("no command → refused; a too-small `every` is lifted to the floor", async () => {
-    const { tools, done } = fixture({ locale: "en" });   // minWatchS defaults to MIN_WATCH_S
+    const { tools, done } = fixture({ locale: "en" }); // minWatchS defaults to MIN_WATCH_S
     expect(await tools.call("start_watch", JSON.stringify({ every: 30 }))).toContain(
       "No command to watch",
     );
@@ -348,7 +344,7 @@ describe("the watch chip — a check repeated at an interval, forever", () => {
       JSON.stringify({ command: "echo 42%", every: 1, label: "battery" }),
     );
     expect(tools.tasks()).toHaveLength(1);
-    expect(tools.tasks()[0]!.due_in_ms).toBeGreaterThan(4000);   // floored at MIN_WATCH_S (5 s)
+    expect(tools.tasks()[0]!.due_in_ms).toBeGreaterThan(4000); // floored at MIN_WATCH_S (5 s)
     tools.cancelTask("watch-1");
     done();
   });
@@ -371,14 +367,14 @@ describe("a task's queued voice", () => {
       JSON.stringify({ command: "echo 42%", every: 0.2, label: "battery" }),
     );
     await until(() => a.announcements.length >= 1, "a first report");
-    await sleep(250);                        // several more checks while it is "speaking"
+    await sleep(250); // several more checks while it is "speaking"
     expect(a.announcements).toHaveLength(1); // the newest value, never a backlog
     expect(a.announcements[0]!.text).toBe("Check of battery: 42%");
 
     tools.cancelTask("watch-1");
-    expect(a.announcements).toEqual([]);     // what it had queued goes with it
+    expect(a.announcements).toEqual([]); // what it had queued goes with it
     await sleep(250);
-    expect(a.announcements).toEqual([]);     // and nothing new arrives: the loop is over
+    expect(a.announcements).toEqual([]); // and nothing new arrives: the loop is over
     done();
   });
 
@@ -389,9 +385,9 @@ describe("a task's queued voice", () => {
       "start_watch",
       JSON.stringify({ command: "sleep 0.4 && echo LATE", every: 0.2, label: "slow" }),
     );
-    tools.cancelTask("watch-1");   // the ✕ lands while the first check is still running
+    tools.cancelTask("watch-1"); // the ✕ lands while the first check is still running
     await sleep(900);
-    expect(a.announcements).toEqual([]);   // its output was killed with it, not reported
+    expect(a.announcements).toEqual([]); // its output was killed with it, not reported
     expect(tools.tasks()).toEqual([]);
     done();
   });

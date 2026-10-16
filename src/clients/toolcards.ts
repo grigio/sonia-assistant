@@ -1,7 +1,7 @@
 /** Collapsible tool-card payloads shared by the API leg and the pi leg. */
 
 import type { ToolEvent } from "../events";
-import { t, type Locale } from "../i18n";
+import { type Locale, t } from "../i18n";
 
 export type ToolPayload = Omit<ToolEvent, "type">;
 
@@ -29,7 +29,12 @@ export function toolSummary(args: unknown): string {
   return String(a).slice(0, 100);
 }
 
-export function toolStart(origin: string, callId: string, name: string, args: unknown): ToolPayload {
+export function toolStart(
+  origin: string,
+  callId: string,
+  name: string,
+  args: unknown,
+): ToolPayload {
   return {
     phase: "start",
     origin,
@@ -67,11 +72,11 @@ export function piResultText(result: unknown): string {
   if (typeof result === "string") return result;
   if (result !== null && typeof result === "object") {
     const obj = result as Record<string, unknown>;
-    const blocks = obj["content"];
+    const blocks = obj.content;
     if (Array.isArray(blocks)) {
       const text = blocks
         .filter((b): b is Record<string, unknown> => typeof b === "object" && b !== null)
-        .map((b) => String(b["text"] ?? "").trim())
+        .map((b) => String(b.text ?? "").trim())
         .filter(Boolean)
         .join(" ")
         .trim();
@@ -88,13 +93,15 @@ export function piResultText(result: unknown): string {
 export function piToolInfo(result: unknown, locale: Locale = "it"): string {
   const sc =
     result !== null && typeof result === "object"
-      ? ((result as Record<string, unknown>)["structuredContent"] as Record<string, unknown> | undefined)
+      ? ((result as Record<string, unknown>).structuredContent as
+          | Record<string, unknown>
+          | undefined)
       : undefined;
   if (!sc || typeof sc !== "object") return "";
   const bits: string[] = [];
-  if (sc["exit_code"] !== null && sc["exit_code"] !== undefined) bits.push(`exit ${sc["exit_code"]}`);
-  const wall = sc["wall_time_seconds"];
+  if (sc.exit_code !== null && sc.exit_code !== undefined) bits.push(`exit ${sc.exit_code}`);
+  const wall = sc.wall_time_seconds;
   if (typeof wall === "number" && wall > 0) bits.push(`${wall.toFixed(2)} s`);
-  if (sc["truncated"]) bits.push(t(locale, "tool.truncated"));
+  if (sc.truncated) bits.push(t(locale, "tool.truncated"));
   return bits.join(" · ");
 }

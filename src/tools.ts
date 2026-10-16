@@ -5,13 +5,14 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import type { ChatMessage } from "./clients/llm-types";
+import type { ToolPayload } from "./clients/toolcards";
+import { isSafeCommand, isSensitiveCommand } from "./command-policy";
+import type { TaskInfo } from "./events";
+import { detectLocale, intlLocale, type Locale, parseLocale, t } from "./i18n";
 import { runShell } from "./shell-runner";
 import type { Skills } from "./skills";
-import { isSafeCommand } from "./command-policy";
-import { detectLocale, intlLocale, parseLocale, t, type Locale } from "./i18n";
-import type { ChatMessage } from "./clients/llm-types";
-import type { TaskInfo } from "./events";
-import type { ToolPayload } from "./clients/toolcards";
+import { writeJsonAtomic } from "./util";
 
 export {
   isSafeCommand,
@@ -75,8 +76,7 @@ export const SCHEMAS: Record<string, unknown>[] = [
           label: { type: "string", description: "Short name: what the user hears and sees" },
           match: {
             type: "string",
-            description:
-              "Optional: tell the user only when the output starts containing this text",
+            description: "Optional: tell the user only when the output starts containing this text",
           },
         },
         required: ["command", "every"],
@@ -208,7 +208,9 @@ export const COMMAND_SCHEMA: Record<string, unknown> = {
  * call, so the judge is never shown a bare `{}`.
  */
 export function argSummary(raw: string | undefined, max = 160): string {
-  const s = String(raw ?? "").replace(/\s+/g, " ").trim();
+  const s = String(raw ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!s || s === "{}") return "";
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
@@ -342,7 +344,7 @@ export class Tools {
   constructor(opts: {
     dataDir: string;
     announce: (text: string, key?: string) => void;
-    withdraw?: (key: string) => void | null;
+    withdraw?: (key: string) => void;
     approve?: ApproveFn | null;
     emit?: EmitFn;
     cmdMode?: CmdMode;
@@ -360,11 +362,11 @@ export class Tools {
     this.withdraw = opts.withdraw ?? null;
     this.approve = opts.approve ?? null;
     this.emit = opts.emit ?? (() => {});
-    this.cmdMode = opts.cmdMode ?? "auto";   // same default as CMD_MODE in config.ts
+    this.cmdMode = opts.cmdMode ?? "auto"; // same default as CMD_MODE in config.ts
     this.cmdTimeoutS = opts.cmdTimeoutS ?? 30;
     this.minWatchS = opts.minWatchS ?? MIN_WATCH_S;
     this.chatEpoch = opts.epoch ?? (() => 0);
-    this.locale = opts.locale ?? "it";        // same default as LOCALE in config.ts
+    this.locale = opts.locale ?? "it"; // same default as LOCALE in config.ts
     this.skills = opts.skills ?? null;
     this.history = opts.history ?? (() => []);
     this.log = opts.log ?? null;
@@ -383,6 +385,16 @@ export class Tools {
     this.cmdSeq++;
     const cid = this.cmdSeq;
     const safe = isSafeCommand(command, this.skills?.dir);
+
+    // Sensitive paths are never touched unattended (command-policy.ts, rule 4): "ask"
+    // prompts (safe=false → the approval below); "auto" — the mode where there is no one
+    // to ask — refuses here. Without this check the SENSITIVE classification existed but
+    // was consulted nowhere in this mode, and `cat ~/.ssh/id_rsa` ran hands-free.
+    if (!safe && this.cmdMode === "auto" && isSensitiveCommand(command)) {
+      if (this.chatEpoch() === epoch)
+        this.emit({ type: "command_result", id: cid, command, status: "denied", output: "" });
+      return t(this.locale, "cmd.sensitive");
+    }
 
     if (this.cmdMode === "ask" && !safe) {
       const ok = this.approve ? await this.approve(command, reason) : false;
@@ -412,11 +424,16 @@ export class Tools {
     this.emitTasks();
 
     try {
-      const { rc, output: text, timedOut } = await runShell(command, {
+      const {
+        rc,
+        output: text,
+        timedOut,
+      } = await runShell(command, {
         timeoutS: this.cmdTimeoutS,
         signal: ctl.signal,
       });
-      if (this.chatEpoch() === epoch)   // chat cleaned meanwhile → no stale card in the new one
+      if (this.chatEpoch() === epoch)
+        // chat cleaned meanwhile → no stale card in the new one
         this.emit({
           type: "command_result",
           id: cid,
@@ -471,18 +488,19 @@ export class Tools {
    * UI's: with `LOCALE=en` and "tra cinque minuti il saluto finale" the ring must read
    * «Il Saluto finale è scaduto.», never "The Saluto finale has expired."
    */
-  async call(
-    name: string,
-    argsJson: string,
-    signal?: AbortSignal,
-    langHint = "",
-  ): Promise<string> {
-    let args: Record<string, unknown> = {};
+  async call(name: string, argsJson: string, signal?: AbortSignal, langHint = ""): Promise<string> {
+    // A malformed JSON blob is the *model's* mistake: say so instead of quietly
+    // proceeding with empty args — which for a typo'd set_timer used to mean a silent,
+    // invented 60 s "timer". (An empty string is the normal "no args".)
+    let parsed: unknown = null;
     try {
-      args = JSON.parse(argsJson || "{}") as Record<string, unknown>;
+      parsed = JSON.parse(argsJson || "{}");
     } catch {
-      args = {};
+      return t(this.locale, "tool.badArgs", { name });
     }
+    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed))
+      return t(this.locale, "tool.badArgs", { name });
+    const args = parsed as Record<string, unknown>;
     if (name === "get_datetime") {
       const n = new Date();
       const date = new Intl.DateTimeFormat(intlLocale(this.locale), {
@@ -495,18 +513,17 @@ export class Tools {
       return t(this.locale, "date.full", { date, time });
     }
     if (name === "set_timer") {
-      const secs = Math.max(1, Number(args["seconds"] ?? 60) || 60);
-      const label = String(args["label"] ?? "") || "timer";
+      const secs = Math.max(1, Number(args.seconds ?? 60) || 60);
+      const label = String(args.label ?? "") || "timer";
       // the model may name the language outright (`lang`), else it is read off the request
       // and off the label — the user's own words — falling back to the session's locale
       const loc =
-        parseLocale(String(args["lang"] ?? "")) ??
-        detectLocale(`${langHint} ${label}`, this.locale);
+        parseLocale(String(args.lang ?? "")) ?? detectLocale(`${langHint} ${label}`, this.locale);
       const id = `timer-${++this.timerSeq}`;
       const dueAt = Date.now() + secs * 1000;
       const timer = setTimeout(() => {
         this.timers.delete(id);
-        this.emitTasks();   // the chip goes with the ring it was counting down to
+        this.emitTasks(); // the chip goes with the ring it was counting down to
         this.announce(t(loc, "announce.timerExpired", { label }), id);
       }, secs * 1000);
       this.timers.set(id, { timer, label, dueAt, locale: loc });
@@ -517,28 +534,28 @@ export class Tools {
       return await this.startWatch(args, langHint);
     }
     if (name === "stop_watch") {
-      return this.stopWatch(String(args["label"] ?? ""));
+      return this.stopWatch(String(args.label ?? ""));
     }
     if (name === "add_note") {
       const notes = this.notes();
-      notes.push(String(args["text"] ?? ""));
-      fs.writeFileSync(this.notesPath, JSON.stringify(notes, null, 1));
+      notes.push(String(args.text ?? ""));
+      writeJsonAtomic(this.notesPath, notes, 1);
       return t(this.locale, "note.saved");
     }
     if (name === "remove_note") {
       const notes = this.notes();
       if (!notes.length) return t(this.locale, "note.noneRemove");
-      const idx = Math.trunc(Number(args["index"] ?? NaN));
+      const idx = Math.trunc(Number(args.index ?? NaN));
       if (!Number.isFinite(idx) || idx < 1 || idx > notes.length)
         return t(this.locale, "note.index", { n: notes.length });
       const victim = notes[idx - 1]!;
       // the model may act on a stale list (the user removed one by voice meanwhile): the
       // optional `text` is a checksum — no match, no deletion, and the caller is told why.
-      const expected = String(args["text"] ?? "").trim();
+      const expected = String(args.text ?? "").trim();
       if (expected && !victim.includes(expected))
         return t(this.locale, "note.mismatch", { idx, victim });
       notes.splice(idx - 1, 1);
-      fs.writeFileSync(this.notesPath, JSON.stringify(notes, null, 1));
+      writeJsonAtomic(this.notesPath, notes, 1);
       return notes.length
         ? t(this.locale, "note.removed", { idx, victim })
         : t(this.locale, "note.removedLast", { idx, victim });
@@ -546,15 +563,19 @@ export class Tools {
     if (name === "clear_notes") {
       const notes = this.notes();
       if (!notes.length) return t(this.locale, "note.noneClear");
-      const confirm =
-        args["confirm"] === true || String(args["confirm"]).toLowerCase() === "true";
+      const confirm = args.confirm === true || String(args.confirm).toLowerCase() === "true";
       if (!confirm) return t(this.locale, "note.clearAsk", { n: notes.length });
-      fs.writeFileSync(this.notesPath, JSON.stringify([], null, 1));
-      return t(this.locale, "note.cleared", { n: notes.length }) + notes.map((n, i) => `${i + 1}. ${n}`).join(" | ");
+      writeJsonAtomic(this.notesPath, [], 1);
+      return (
+        t(this.locale, "note.cleared", { n: notes.length }) +
+        notes.map((n, i) => `${i + 1}. ${n}`).join(" | ")
+      );
     }
     if (name === "list_notes") {
       const notes = this.notes();
-      return notes.length ? notes.map((n, i) => `${i + 1}. ${n}`).join("\n") : t(this.locale, "note.none");
+      return notes.length
+        ? notes.map((n, i) => `${i + 1}. ${n}`).join("\n")
+        : t(this.locale, "note.none");
     }
     if (name === "list_skills") {
       if (!this.skills) return "No skills directory is configured.";
@@ -562,24 +583,18 @@ export class Tools {
       if (!list.length) return `No skills found in ${this.skills.dir}.`;
       return (
         "Skills (the user chooses in the UI which ones are active):\n" +
-        list
-          .map((s) => `${s.active ? "active" : "OFF  "} ${s.name}: ${s.description}`)
-          .join("\n")
+        list.map((s) => `${s.active ? "active" : "OFF  "} ${s.name}: ${s.description}`).join("\n")
       );
     }
     if (name === "read_skill") {
       if (!this.skills) return "No skills directory is configured.";
-      const body = this.skills.read(String(args["name"] ?? ""));
+      const body = this.skills.read(String(args.name ?? ""));
       const again = this.alreadyInContext(body);
       if (again) return again;
       return body;
     }
     if (name === "run_command") {
-      return await this.runCommand(
-        String(args["command"] ?? ""),
-        String(args["reason"] ?? ""),
-        signal,
-      );
+      return await this.runCommand(String(args.command ?? ""), String(args.reason ?? ""), signal);
     }
     return t(this.locale, "tool.unknown", { name });
   }
@@ -594,11 +609,7 @@ export class Tools {
     const key = body.slice(0, 400);
     // an error line ("No skill named 'x' …") is single-line and says nothing to reuse
     if (key.length < 40 || !key.includes("\n")) return null;
-    if (
-      !this.history().some(
-        (m) => typeof m.content === "string" && m.content.includes(key),
-      )
-    ) {
+    if (!this.history().some((m) => typeof m.content === "string" && m.content.includes(key))) {
       return null;
     }
     const fm = /^---[\s\S]*?name:\s*([^\n]+)/.exec(body);
@@ -621,26 +632,38 @@ export class Tools {
     const nowMs = Date.now();
     const rows: [string, number, TaskInfo][] = [];
     for (const [id, timer] of this.timers)
-      rows.push([id, timer.dueAt, {
+      rows.push([
         id,
-        kind: "timer",
-        label: timer.label,
-        due_in_ms: Math.max(0, timer.dueAt - nowMs),
-      }]);
+        timer.dueAt,
+        {
+          id,
+          kind: "timer",
+          label: timer.label,
+          due_in_ms: Math.max(0, timer.dueAt - nowMs),
+        },
+      ]);
     for (const [id, cmd] of this.commands)
-      rows.push([id, cmd.dueAt, {
+      rows.push([
         id,
-        kind: "command",
-        label: cmd.command,
-        due_in_ms: Math.max(0, cmd.dueAt - nowMs),
-      }]);
+        cmd.dueAt,
+        {
+          id,
+          kind: "command",
+          label: cmd.command,
+          due_in_ms: Math.max(0, cmd.dueAt - nowMs),
+        },
+      ]);
     for (const [id, watch] of this.watches)
-      rows.push([id, watch.dueAt, {
+      rows.push([
         id,
-        kind: "watch",
-        label: watch.label,
-        due_in_ms: Math.max(0, watch.dueAt - nowMs),
-      }]);
+        watch.dueAt,
+        {
+          id,
+          kind: "watch",
+          label: watch.label,
+          due_in_ms: Math.max(0, watch.dueAt - nowMs),
+        },
+      ]);
     rows.sort((a, b) => a[1] - b[1]);
     return rows.map((r) => r[2]);
   }
@@ -657,20 +680,20 @@ export class Tools {
   cancelTask(id: string): TaskInfo | null {
     const timer = this.timers.get(id);
     if (timer) {
-      clearTimeout(timer.timer);      // before it fires: no ring is queued to take back
+      clearTimeout(timer.timer); // before it fires: no ring is queued to take back
       this.timers.delete(id);
       this.emitTasks();
       return { id, kind: "timer", label: timer.label };
     }
     const cmd = this.commands.get(id);
     if (cmd) {
-      cmd.cancelled = true;          // runCommand turns the abort into a result, not a failure
-      this.commands.delete(id);      // the chip goes now, not when the process reports back
+      cmd.cancelled = true; // runCommand turns the abort into a result, not a failure
+      this.commands.delete(id); // the chip goes now, not when the process reports back
       cmd.ctl.abort();
       this.emitTasks();
       return { id, kind: "command", label: cmd.command };
     }
-    const watch = this.dropWatch(id);   // same as stop_watch, by id: the loop really ends
+    const watch = this.dropWatch(id); // same as stop_watch, by id: the loop really ends
     if (watch) return { id, kind: "watch", label: watch.label };
     return null;
   }
@@ -705,29 +728,24 @@ export class Tools {
    * The approval, if the policy wants one, is asked once here and never again: an
    * unattended loop cannot knock on the user's door every 30 seconds. Denied → no watch.
    */
-  private async startWatch(
-    args: Record<string, unknown>,
-    langHint: string,
-  ): Promise<string> {
-    const command = String(args["command"] ?? "").trim();
+  private async startWatch(args: Record<string, unknown>, langHint: string): Promise<string> {
+    const command = String(args.command ?? "").trim();
     if (!command) return t(this.locale, "watch.none");
     if (this.cmdMode === "off") return t(this.locale, "cmd.disabled");
-    const raw = Number(args["every"] ?? 60);
-    const everyS = Math.max(
-      this.minWatchS,
-      Math.trunc(Number.isFinite(raw) && raw > 0 ? raw : 60),
-    );
-    const label = String(args["label"] ?? "").trim() || command;
-    const match = String(args["match"] ?? "").trim();
+    const raw = Number(args.every ?? 60);
+    const everyS = Math.max(this.minWatchS, Math.trunc(Number.isFinite(raw) && raw > 0 ? raw : 60));
+    const label = String(args.label ?? "").trim() || command;
+    const match = String(args.match ?? "").trim();
     // its checks speak later, out of any turn: the language of the request that asked
     const loc =
-      parseLocale(String(args["lang"] ?? "")) ??
-      detectLocale(`${langHint} ${label}`, this.locale);
+      parseLocale(String(args.lang ?? "")) ?? detectLocale(`${langHint} ${label}`, this.locale);
     const safe = isSafeCommand(command, this.skills?.dir);
+    // same rule as runCommand: sensitive paths never run unattended — "auto" refuses
+    // (there is no one to ask on the later ticks either), "ask" prompts just below.
+    if (this.cmdMode === "auto" && !safe && isSensitiveCommand(command))
+      return t(this.locale, "cmd.sensitive");
     if (this.cmdMode !== "auto" && !safe) {
-      const ok = this.approve
-        ? await this.approve(command, `watch, every ${everyS}s`)
-        : false;
+      const ok = this.approve ? await this.approve(command, `watch, every ${everyS}s`) : false;
       if (!ok) return t(this.locale, "cmd.denied");
     }
     const id = `watch-${++this.watchSeq}`;
@@ -742,7 +760,7 @@ export class Tools {
       timer: null,
       locale: loc,
     });
-    this.watchTick(id);   // the first check, now — it also books the second one
+    this.watchTick(id); // the first check, now — it also books the second one
     return t(loc, "watch.started", { label, s: everyS });
   }
 
@@ -754,10 +772,10 @@ export class Tools {
   private watchTick(id: string): void {
     const watch = this.watches.get(id);
     if (!watch) return;
-    const everyMs = Math.max(50, watch.everyS * 1000);   // a 0-interval may never spin
+    const everyMs = Math.max(50, watch.everyS * 1000); // a 0-interval may never spin
     watch.dueAt = Date.now() + everyMs;
     watch.timer = setTimeout(() => this.watchTick(id), everyMs);
-    watch.ctl = new AbortController();   // every check can be killed on its own
+    watch.ctl = new AbortController(); // every check can be killed on its own
     this.emitTasks();
     void this.watchCheck(id, watch);
   }
@@ -771,15 +789,13 @@ export class Tools {
         signal: watch.ctl.signal,
       });
       output = r.output;
-      this.log?.(
-        `🔎 watch «${watch.label}» → exit ${r.rc}${r.timedOut ? " (timeout)" : ""}`,
-      );
+      this.log?.(`🔎 watch «${watch.label}» → exit ${r.rc}${r.timedOut ? " (timeout)" : ""}`);
     } catch (e) {
       // a ✕ on the chip, or a check that blew up: the loop's next tick is already booked
       this.log?.(`🔎 watch «${watch.label}» → check failed: ${String(e)}`);
       return;
     }
-    if (this.watches.get(id) !== watch) return;   // stopped while it ran → say nothing
+    if (this.watches.get(id) !== watch) return; // stopped while it ran → say nothing
 
     if (watch.match) {
       // quiet until the condition starts holding, and said on the way *in* only: a
@@ -791,7 +807,7 @@ export class Tools {
             label: watch.label,
             out: this.speakable(output || watch.match),
           }),
-          id,   // a newer report replaces the waiting one: never a backlog
+          id, // a newer report replaces the waiting one: never a backlog
         );
       watch.matched = hit;
       return;
@@ -801,7 +817,7 @@ export class Tools {
         label: watch.label,
         out: this.speakable(output || t(watch.locale, "cmd.noOutput")),
       }),
-      id,   // a newer report replaces the waiting one: never a backlog
+      id, // a newer report replaces the waiting one: never a backlog
     );
   }
 
@@ -830,8 +846,7 @@ export class Tools {
         : t(this.locale, "watch.noneRunning");
     }
     const hits = [...this.watches].filter(
-      ([, w]) =>
-        w.label.toLowerCase().includes(frag) || w.command.toLowerCase().includes(frag),
+      ([, w]) => w.label.toLowerCase().includes(frag) || w.command.toLowerCase().includes(frag),
     );
     if (!hits.length) return t(this.locale, "watch.notFound", { label: fragment });
     for (const [id] of hits) this.dropWatch(id);
@@ -851,7 +866,8 @@ export class Tools {
   close(): void {
     for (const timer of this.timers.values()) clearTimeout(timer.timer);
     this.timers.clear();
-    for (const watch of this.watches.values()) {   // a watch is a loop: it must not outlive
+    for (const watch of this.watches.values()) {
+      // a watch is a loop: it must not outlive
       if (watch.timer) clearTimeout(watch.timer); // the process that would announce it
       watch.ctl.abort();
     }

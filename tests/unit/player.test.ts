@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { exactFrames, QueueMic } from "../../src/audio/mic";
 import { Player } from "../../src/audio/player";
-import { QueueMic, exactFrames } from "../../src/audio/mic";
 import { FRAME_BYTES } from "../../src/audio/wav";
 
 function sleep(ms: number): Promise<void> {
@@ -146,6 +146,11 @@ describe("exactFrames", () => {
     }
     const frames: Uint8Array[] = [];
     for await (const f of exactFrames(src(), 2)) frames.push(f);
-    expect(frames.map((f) => [...f])).toEqual([[1, 2], [3, 4], [5, 6], [7, 8]]);
+    expect(frames.map((f) => [...f])).toEqual([
+      [1, 2],
+      [3, 4],
+      [5, 6],
+      [7, 8],
+    ]);
   });
 });

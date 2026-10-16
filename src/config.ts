@@ -6,13 +6,51 @@
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { normalizeLocale, type Locale } from "./i18n";
+import { type Locale, normalizeLocale } from "./i18n";
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 /** pi's model when PI_MODEL is not set: the default assistant model, served by the
  *  same llama-server — 2.7 GiB Q4_K_M with MTP speculative decoding. */
 export const PI_DEFAULT_MODEL = "llamacpp/Qwen3.5-4B-MTP-Q4_K_M";
+
+/** The values CMD_MODE/DECISION_MODE accept — the exact literals `tools.ts` and `turn.ts`
+ *  pattern-match on. An unvalidated env value would silently skip the approval gate in
+ *  `runCommand` (anything but exactly "off"/"ask" behaves as "auto" there), so unknown
+ *  spellings must never pass through. */
+export const CMD_MODES = ["off", "ask", "auto"] as const;
+export type CmdMode = (typeof CMD_MODES)[number];
+export const DECISION_MODES = ["off", "auto", "always"] as const;
+export type DecisionMode = (typeof DECISION_MODES)[number];
+
+/**
+ * Normalise one mode value. Case-insensitive on purpose ("ASK", "Auto" are fine).
+ *
+ * An unknown spelling falls back to the mode the *user can see what it does*: `ask` for
+ * CMD_MODE, where the first non-read-only command knocks on the screen — the safest of
+ * the three, and the one where a typo stops hiding (the previous behaviour risked exactly
+ * the silent widening a mistake wants: `CMD_MODE=Ask2` looked like "never run" and ran
+ * like `auto`). With stderr telling the user, the fallback is visible either way.
+ */
+export function normalizeCmdMode(raw: string, log = console.warn): CmdMode {
+  const v = raw.trim().toLowerCase();
+  for (const m of CMD_MODES) if (v === m) return m;
+  if ((raw ?? "").trim())
+    log(`⚠ CMD_MODE=${raw} is not one of off|ask|auto — using "ask" (safest)`);
+  return "ask";
+}
+
+/** The same for DECISION_MODE: no safety implication, the class default ("auto") wins. */
+export function normalizeDecisionMode(raw: string, log = console.warn): DecisionMode {
+  const v = raw.trim().toLowerCase();
+  for (const m of DECISION_MODES) if (v === m) return m;
+  if ((raw ?? "").trim())
+    log(`⚠ DECISION_MODE=${raw} is not one of off|auto|always — using "auto"`);
+  return "auto";
+}
+
+/** The Pocket TTS packs `models-download` knows (a custom TTS_VOICE_DIR needs none). */
+export const TTS_LANGS = ["italian", "english", "german", "portuguese", "spanish"] as const;
 
 type Default = string | number | boolean;
 
@@ -174,6 +212,20 @@ export class Config {
         (cfg as unknown as Record<string, Default>)[key] = String(val);
       }
     }
+    // The enum modes get the one check their consumers cannot afford to miss: every
+    // non-literal value acts as "auto" in `runCommand`'s `===` dispatch (and as "always
+    // ask the judge" in the turn rules), so this is the only place the typo can be caught.
+    cfg.cmdMode = normalizeCmdMode(cfg.cmdMode);
+    cfg.decisionMode = normalizeDecisionMode(cfg.decisionMode);
+    // A typo'd pack name silently serves no GGUF (the audio server starts with an
+    // unknown `language`, the voices dir resolves to nothing). Named packs only; a
+    // custom TTS_VOICE_DIR may want whatever it wants.
+    if (!TTS_LANGS.includes(cfg.ttsLang as (typeof TTS_LANGS)[number])) {
+      console.warn(
+        `⚠ TTS_LANG=${cfg.ttsLang} is none of ${TTS_LANGS.join("|")} — ` +
+          `set TTS_VOICE_DIR if the pack under <MODELS_DIR>/PocketTTS-GGUF/custom/ is yours`,
+      );
+    }
     // PI_MODEL is also pi's *own* ambient variable: a bare "name" next to PI_PROVIDER must
     // not hijack ours (ours is always the full "provider/id").
     if (cfg.piModel && !cfg.piModel.includes("/")) cfg.piModel = PI_DEFAULT_MODEL;
@@ -182,5 +234,3 @@ export class Config {
     return cfg;
   }
 }
-
-export type ConfigKey = keyof Config;

@@ -6,7 +6,7 @@
  * Timing runs on `performance.now()` (monotonic).
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs";
 import { sleep } from "../util";
 
@@ -57,10 +57,14 @@ export class Player {
         "pw-cat",
         "--playback",
         "--raw",
-        "--rate", String(this.rate),
-        "--channels", "1",
-        "--format", "s16",
-        "--latency", `${this.latencyMs}ms`,
+        "--rate",
+        String(this.rate),
+        "--channels",
+        "1",
+        "--format",
+        "s16",
+        "--latency",
+        `${this.latencyMs}ms`,
       ];
       if (this.target) cmd.push("--target", this.target);
       cmd.push("-");
@@ -106,7 +110,8 @@ export class Player {
 
   enqueue(pcm: Uint8Array): void {
     const last = this.queue[this.queue.length - 1];
-    if (!last || last.done) this.queue.push({ pcm: new Uint8Array(0), tag: "", started: false, done: false });
+    if (!last || last.done)
+      this.queue.push({ pcm: new Uint8Array(0), tag: "", started: false, done: false });
     const seg = this.queue[this.queue.length - 1]!;
     const merged = new Uint8Array(seg.pcm.length + pcm.length);
     merged.set(seg.pcm, 0);

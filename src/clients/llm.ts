@@ -6,13 +6,12 @@
  */
 
 import type { Config } from "../config";
-import { PiSession } from "./pi";
-import { sseData } from "./sse";
-import type { ChatMessage, StreamItem, TurnVerdict } from "./llm-types";
-import type { ToolCall } from "./llm-types";
-import { ThinkTagFilter } from "./think";
 import { contextsFromServerModels } from "../context";
 import { timeoutSignal } from "../util";
+import type { ChatMessage, StreamItem, ToolCall, TurnVerdict } from "./llm-types";
+import { PiSession } from "./pi";
+import { sseData } from "./sse";
+import { ThinkTagFilter } from "./think";
 
 export type { ChatMessage, StreamItem, ToolCall, TurnVerdict } from "./llm-types";
 
@@ -31,12 +30,39 @@ export class LLM {
 
   private headers(): Record<string, string> {
     const h: Record<string, string> = { "Content-Type": "application/json" };
-    if (this.cfg.llmApiKey) h["Authorization"] = `Bearer ${this.cfg.llmApiKey}`;
+    if (this.cfg.llmApiKey) h.Authorization = `Bearer ${this.cfg.llmApiKey}`;
     return h;
   }
 
   private get base(): string {
     return this.cfg.llmBaseUrl.replace(/\/+$/, "");
+  }
+
+  /**
+   * One `POST {base}/chat/completions` for the whole class: the JSON headers, the
+   * timeout *and* the caller's AbortSignal (a barge-in must stop this request now, not
+   * when the timeout lands), plus the error report every endpoint shares —
+   * `${label} HTTP ${status}: <first bytes of the body>` — so a failure names the leg
+   * that failed instead of appearing four times, slightly differently.
+   */
+  private async post(
+    label: string,
+    base: string,
+    body: Record<string, unknown>,
+    timeoutMs: number,
+    signal?: AbortSignal,
+  ): Promise<Response> {
+    const r = await fetch(`${base.replace(/\/+$/, "")}/chat/completions`, {
+      method: "POST",
+      headers: this.headers(),
+      body: JSON.stringify(body),
+      signal: timeoutSignal(timeoutMs, signal),
+    });
+    if (!r.ok) {
+      const t = await r.text();
+      throw new Error(`${label} HTTP ${r.status}: ${t.slice(0, 300)}`);
+    }
+    return r;
   }
 
   // ── turn-taking judge (LISTEN/REPLY) ────────────────────────────────────────
@@ -87,7 +113,7 @@ export class LLM {
       this.pi.exe(); // throws when pi is not installed / not in PATH
       return await this.pi.modelIds(force);
     }
-    const r = await fetch(this.base + "/models", {
+    const r = await fetch(`${this.base}/models`, {
       headers: this.headers(),
       signal: AbortSignal.timeout(10_000),
     });
@@ -139,16 +165,7 @@ export class LLM {
       max_tokens: 1,
       temperature: 0,
     };
-    const r = await fetch(this.base + "/chat/completions", {
-      method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(600_000),
-    });
-    if (!r.ok) {
-      const t = await r.text();
-      throw new Error(`LLM warmup HTTP ${r.status}: ${t.slice(0, 300)}`);
-    }
+    const r = await this.post("LLM warmup", this.base, body, 600_000);
     await r.arrayBuffer();
   }
 
@@ -168,21 +185,13 @@ export class LLM {
       model: this.judgeModel,
       messages: [
         { role: "system", content: decisionPrompt },
-        { role: "user", content: "Recent context:\n(none)\n\nUser transcript so far:\n\"\"" },
+        { role: "user", content: 'Recent context:\n(none)\n\nUser transcript so far:\n""' },
       ],
       max_tokens: 4,
       temperature: 0,
     };
-    const r = await fetch(this.judgeBase + "/chat/completions", {
-      method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120_000), // a cold dedicated server loads its model here
-    });
-    if (!r.ok) {
-      const t = await r.text();
-      throw new Error(`judge warmup HTTP ${r.status}: ${t.slice(0, 300)}`);
-    }
+    // 120 s: a cold dedicated server loads its model right here
+    const r = await this.post("judge warmup", this.judgeBase, body, 120_000);
     await r.arrayBuffer();
   }
 
@@ -223,14 +232,9 @@ export class LLM {
       max_tokens: 4,
       temperature: 0,
     };
-    const r = await fetch(this.judgeBase + "/chat/completions", {
-      method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify(body),
-      // the timeout bounds a stalled llama-server, the caller's signal makes
-      // cancelling the response stop *this* request too (instead of 15 s later)
-      signal: timeoutSignal(15_000, signal),
-    });
+    // the timeout bounds a stalled llama-server, the caller's signal makes cancelling
+    // the response stop *this* request too (instead of 15 s later)
+    const r = await this.post("judge", this.judgeBase, body, 15_000, signal);
     const js = (await r.json()) as {
       choices?: { message?: { content?: string | null } }[];
     };
@@ -247,6 +251,7 @@ export class LLM {
   async *stream(
     messages: ChatMessage[],
     tools: Record<string, unknown>[] | null,
+    signal?: AbortSignal,
   ): AsyncGenerator<StreamItem, void, unknown> {
     if (this.viaPi) {
       yield* this.pi.stream(messages);
@@ -261,18 +266,12 @@ export class LLM {
       max_tokens: this.cfg.llmMaxTokens + (this.thinking ? this.cfg.llmReasoningBudget : 0),
       temperature: this.cfg.llmTemperature,
     };
-    if (tools) body["tools"] = tools;
+    if (tools) body.tools = tools;
 
-    const r = await fetch(this.base + "/chat/completions", {
-      method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(300_000),
-    });
-    if (!r.ok) {
-      const t = await r.text();
-      throw new Error(`LLM HTTP ${r.status}: ${t.slice(0, 300)}`);
-    }
+    // `signal` is the response's own controller: a barge-in (or a ✕) aborts the request
+    // itself, so llama-server stops generating instead of us walking away from a stream
+    // that keeps burning CPU until the 300 s timeout lands.
+    const r = await this.post("LLM", this.base, body, 300_000, signal);
     if (!r.body) throw new Error("LLM: empty body");
 
     const calls = new Map<number, ToolCall>();
@@ -286,25 +285,25 @@ export class LLM {
         continue;
       }
       // the final chunk has `choices: []` and holds the usage — read it first
-      const usage = js["usage"] as
+      const usage = js.usage as
         | { prompt_tokens?: unknown; completion_tokens?: unknown }
         | undefined;
-      if (usage && typeof usage["prompt_tokens"] === "number") {
+      if (usage && typeof usage.prompt_tokens === "number") {
         const completion =
-          typeof usage["completion_tokens"] === "number" ? usage["completion_tokens"] : 0;
-        yield { kind: "usage", prompt: usage["prompt_tokens"], completion };
+          typeof usage.completion_tokens === "number" ? usage.completion_tokens : 0;
+        yield { kind: "usage", prompt: usage.prompt_tokens, completion };
       }
-      const choices = js["choices"] as { delta?: Record<string, unknown> }[] | undefined;
-      if (!choices || !choices.length) continue;
+      const choices = js.choices as { delta?: Record<string, unknown> }[] | undefined;
+      if (!choices?.length) continue;
       const delta = choices[0]!.delta ?? {};
       const reasoning = ["reasoning_content", "reasoning", "reasoning_text"]
         .map((k) => delta[k])
         .find((v) => typeof v === "string" && v !== "") as string | undefined;
       if (reasoning) yield { kind: "reasoning", text: reasoning };
-      if (typeof delta["content"] === "string" && delta["content"]) {
-        for (const part of think.feed(delta["content"])) yield part;
+      if (typeof delta.content === "string" && delta.content) {
+        for (const part of think.feed(delta.content)) yield part;
       }
-      const tcs = delta["tool_calls"] as
+      const tcs = delta.tool_calls as
         | { index?: number; id?: string; function?: { name?: string; arguments?: string } }[]
         | undefined;
       for (const tc of tcs ?? []) {
@@ -379,16 +378,7 @@ export class LLM {
       max_tokens: 16,
       temperature: 0,
     };
-    const r = await fetch(this.judgeBase + "/chat/completions", {
-      method: "POST",
-      headers: this.headers(),
-      body: JSON.stringify(body),
-      signal: timeoutSignal(15_000),
-    });
-    if (!r.ok) {
-      const t = await r.text();
-      throw new Error(`tool-gate HTTP ${r.status}: ${t.slice(0, 200)}`);
-    }
+    const r = await this.post("tool-gate", this.judgeBase, body, 15_000);
     const js = (await r.json()) as {
       choices?: { message?: { content?: string | null } }[];
     };

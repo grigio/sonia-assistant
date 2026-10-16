@@ -14,7 +14,18 @@
 
 import fs from "node:fs";
 import path from "node:path";
-
+import {
+  ColorScheme,
+  ComboRow,
+  HeaderBar,
+  PreferencesGroup,
+  PreferencesPage,
+  PreferencesWindow,
+  StyleManager,
+  SwitchRow,
+} from "@sigmasd/gtk/adw";
+import type { CairoContext } from "@sigmasd/gtk/cairo";
+import { EventLoop } from "@sigmasd/gtk/eventloop";
 import {
   Align,
   Application,
@@ -26,7 +37,6 @@ import {
   Display,
   DrawingArea,
   Entry,
-  EventControllerKey,
   Image,
   Label,
   ListBox,
@@ -43,22 +53,19 @@ import {
   StyleContext,
   StyleProviderPriority,
   ToggleButton,
-  Widget,
+  type Widget,
 } from "@sigmasd/gtk/gtk4";
-import { CairoContext } from "@sigmasd/gtk/cairo";
+import { Mic, type MicFrame, Speaker } from "./audio";
 import {
-  ActionRow,
-  ColorScheme,
-  ComboRow,
-  HeaderBar,
-  PreferencesGroup,
-  PreferencesPage,
-  PreferencesWindow,
-  StyleManager,
-  SwitchRow,
-} from "@sigmasd/gtk/adw";
-import { EventLoop } from "@sigmasd/gtk/eventloop";
-
+  onGtkIdle,
+  onGtkIdleOnce,
+  parentOf,
+  setDefaultIconName,
+  setWindowIcon,
+  themeRgba,
+  vadjustmentOf,
+} from "./gtk-raw";
+import { type I18n, makeI18n } from "./i18n";
 import type {
   ClientCommand,
   HistoryMessage,
@@ -68,9 +75,6 @@ import type {
   TaskInfo,
 } from "./protocol";
 import { STALE_ON_RESET } from "./protocol";
-import { onGtkIdle, onGtkIdleOnce, parentOf, setDefaultIconName, setWindowIcon, themeRgba, vadjustmentOf } from "./gtk-raw";
-import { makeI18n, type I18n } from "./i18n";
-import { Mic, Speaker, type MicFrame } from "./audio";
 
 export type AppOptions = {
   wsUrl: string;
@@ -366,7 +370,6 @@ export class SoniaApp {
   private ctxText!: Label;
   private ctxBox!: Box;
   private modelBtn!: MenuButton;
-  private modelPopover!: Popover;
   private modelSearch!: SearchEntry;
   private modelPopTitle!: Label;
   private modelList!: ListBox;
@@ -406,7 +409,6 @@ export class SoniaApp {
   private takenOver = false;
   private resetBarrier = 0;
   private rewindPending = false;
-  private modelsSeq = 0; // newest-wins model refresh
   private modelRefreshPending = false;
 
   // ── chat model ──
@@ -453,7 +455,7 @@ export class SoniaApp {
     // window (no window, no socket, no error). SONIA_GTK4_APP_ID lets a test
     // instance run next to the real one.
     this.app = new Application(
-      process.env["SONIA_GTK4_APP_ID"] || "it.sonia.Assistant",
+      process.env.SONIA_GTK4_APP_ID || "it.sonia.Assistant",
       ApplicationFlags.NONE,
     );
     this.loop = new EventLoop({ pollInterval: 16 });
@@ -462,8 +464,7 @@ export class SoniaApp {
   }
 
   private t = (key: string): string => this.i18n.t(key);
-  private tf = (key: string, vars: Record<string, unknown>): string =>
-    this.i18n.tf(key, vars);
+  private tf = (key: string, vars: Record<string, unknown>): string => this.i18n.tf(key, vars);
 
   async run(): Promise<void> {
     await this.loop.start(this.app);
@@ -483,11 +484,7 @@ export class SoniaApp {
     if (display) {
       const css = new CssProvider();
       css.loadFromData(CSS);
-      StyleContext.addProviderForDisplay(
-        display,
-        css,
-        StyleProviderPriority.APPLICATION,
-      );
+      StyleContext.addProviderForDisplay(display, css, StyleProviderPriority.APPLICATION);
     }
 
     const win = new ApplicationWindow(this.app);
@@ -558,14 +555,8 @@ export class SoniaApp {
     // ~30 fps: a pulsing ring needs a smooth redraw, not a 10 fps step.
     // setInterval fires from Bun's loop, outside GLib's iteration: hop back
     // into the GTK main loop before touching a widget (see onGtkIdle).
-    this.levelTimer = setInterval(
-      () => onGtkIdleOnce("levels", () => this.tickLevels()),
-      33,
-    );
-    this.bannerTimer = setInterval(
-      () => onGtkIdleOnce("banner", () => this.tickBanner()),
-      500,
-    );
+    this.levelTimer = setInterval(() => onGtkIdleOnce("levels", () => this.tickLevels()), 33);
+    this.bannerTimer = setInterval(() => onGtkIdleOnce("banner", () => this.tickBanner()), 500);
 
     // the mic's own signals, set once: a stream that ends without stop() is pw-record
     // dying (device gone, PipeWire restarted, bad --target) → say so, then come back.
@@ -698,7 +689,6 @@ export class SoniaApp {
     this.modelBtn.setTooltipText(this.t("model.api.title"));
     this.modelBtn.setValign(Align.CENTER);
     const pop = new Popover();
-    this.modelPopover = pop;
     const popBox = new Box(Orientation.VERTICAL, 6);
     popBox.setMarginTop(8);
     popBox.setMarginBottom(8);
@@ -912,11 +902,7 @@ export class SoniaApp {
     this.comboCmd = new ComboRow();
     this.comboCmd.setTitle("bash");
     this.comboCmd.setModel(
-      new StringList([
-        this.t("opt.ask"),
-        this.t("opt.auto"),
-        this.t("opt.off"),
-      ]),
+      new StringList([this.t("opt.ask"), this.t("opt.auto"), this.t("opt.off")]),
     );
     this.comboCmd.onSelectedChanged((i) => {
       const v = ["ask", "auto", "off"][i];
@@ -927,11 +913,7 @@ export class SoniaApp {
     this.comboDecision = new ComboRow();
     this.comboDecision.setTitle(this.t("set.turn"));
     this.comboDecision.setModel(
-      new StringList([
-        this.t("opt.auto"),
-        this.t("opt.always"),
-        this.t("opt.off"),
-      ]),
+      new StringList([this.t("opt.auto"), this.t("opt.always"), this.t("opt.off")]),
     );
     this.comboDecision.onSelectedChanged((i) => {
       const v = ["auto", "always", "off"][i];
@@ -1009,16 +991,7 @@ export class SoniaApp {
     const live = this.state === "speaking" || this.state === "listening";
     const spec = ORB_COLOR[this.state] ?? ORB_COLOR.connecting!;
     const rgb = this.themeColor(spec[0], spec[1]) ?? OFFLINE_RGB;
-    this.drawLevelDot(
-      cr,
-      w,
-      h,
-      rgb,
-      this.orbLvl,
-      live && this.voiceOn,
-      0.55,
-      ORB_D / 2,
-    );
+    this.drawLevelDot(cr, w, h, rgb, this.orbLvl, live && this.voiceOn, 0.55, ORB_D / 2);
   }
 
   /** Footer circle: your microphone, always the accent colour, always the input level. */
@@ -1053,7 +1026,8 @@ export class SoniaApp {
     let rgb: [number, number, number] = [c[0], c[1], c[2]];
     if (mixWith) {
       const m = themeRgba(ref, mixWith);
-      if (m) rgb = [rgb[0] * 0.5 + m[0] * 0.5, rgb[1] * 0.5 + m[1] * 0.5, rgb[2] * 0.5 + m[2] * 0.5];
+      if (m)
+        rgb = [rgb[0] * 0.5 + m[0] * 0.5, rgb[1] * 0.5 + m[1] * 0.5, rgb[2] * 0.5 + m[2] * 0.5];
     }
     this.themeCache.set(name, rgb);
     return rgb;
@@ -1097,12 +1071,7 @@ export class SoniaApp {
     if (force || near) adj.setValue(adj.getUpper());
   }
 
-  private addMsg(
-    kind: "user" | "bot",
-    text: string,
-    info?: string,
-    cp?: number,
-  ): ChatNode {
+  private addMsg(kind: "user" | "bot", text: string, info?: string, cp?: number): ChatNode {
     const row = new ListBoxRow();
     const outer = new Box(Orientation.HORIZONTAL, 4);
     outer.setMarginTop(5);
@@ -1125,17 +1094,17 @@ export class SoniaApp {
       body,
       infos: [],
     };
+    // The ⟲ always sits immediately left of the bubble — for the user's line too, so
+    // the control never jumps sides as the conversation goes back and forth. Only the
+    // group's alignment changes (user right, bot left); the order never does.
+    node.rew = this.rewindBtn(node);
+    outer.append(node.rew);
+    outer.append(bubble);
     if (kind === "user") {
       outer.setHalign(Align.END);
       outer.setHexpand(true);
-      outer.append(bubble);
-      node.rew = this.rewindBtn(node);
-      outer.append(node.rew);
     } else {
       outer.setHalign(Align.START);
-      node.rew = this.rewindBtn(node);
-      outer.append(node.rew);
-      outer.append(bubble);
     }
     row.setChild(outer);
     if (info) this.infoLine(node, info, kind);
@@ -1145,11 +1114,7 @@ export class SoniaApp {
     return node;
   }
 
-  private infoLine(
-    node: ChatNode,
-    text: string,
-    kind: "user" | "bot" = "bot",
-  ): Label {
+  private infoLine(node: ChatNode, text: string, kind: "user" | "bot" = "bot"): Label {
     const l = sel(new Label(text));
     l.addCssClass(kind === "user" ? "info-user" : "info-line");
     l.setHalign(Align.START);
@@ -1195,11 +1160,11 @@ export class SoniaApp {
   }
 
   private botAppend(sentence: string): void {
-    if (!this.botBubble || !this.botBubble.body) {
+    if (!this.botBubble?.body) {
       this.botBubble = this.addMsg("bot", "");
     }
     const cur = this.botBubble.body!.getText();
-    this.botBubble.body!.setText((cur + " " + sentence).trim());
+    this.botBubble.body!.setText(`${cur} ${sentence}`.trim());
     this.scrollToBottom();
   }
 
@@ -1233,9 +1198,7 @@ export class SoniaApp {
     );
     const cp = (n: ChatNode) => (n.cp !== null ? Number(n.cp) : null);
     // first line the server dropped — without it nothing shown here was cut at all
-    const dead = this.nodes.findIndex(
-      (n) => cp(n) !== null && !alive.has(cp(n)!),
-    );
+    const dead = this.nodes.findIndex((n) => cp(n) !== null && !alive.has(cp(n)!));
     if (dead < 0) {
       this.addEvent(this.tf("msg.rew.done", { n: 0 }));
       return;
@@ -1257,14 +1220,10 @@ export class SoniaApp {
       this.nodes.pop();
     }
     // the card maps would keep handing back unmounted entries: drop the dead keys
-    for (const [k, c] of this.cards)
-      if (!this.nodes.includes(c.node)) this.cards.delete(k);
-    for (const [k, c] of this.toolCards)
-      if (!this.nodes.includes(c.node)) this.toolCards.delete(k);
-    if (this.botBubble && !this.nodes.includes(this.botBubble))
-      this.botBubble = null;
-    if (this.thinkBlock && !this.nodes.includes(this.thinkBlock.node))
-      this.thinkBlock = null;
+    for (const [k, c] of this.cards) if (!this.nodes.includes(c.node)) this.cards.delete(k);
+    for (const [k, c] of this.toolCards) if (!this.nodes.includes(c.node)) this.toolCards.delete(k);
+    if (this.botBubble && !this.nodes.includes(this.botBubble)) this.botBubble = null;
+    if (this.thinkBlock && !this.nodes.includes(this.thinkBlock.node)) this.thinkBlock = null;
     this.addEvent(this.tf("msg.rew.done", { n: dropped }));
   }
 
@@ -1312,9 +1271,7 @@ export class SoniaApp {
     // short on the button (a GtkButton label does not wrap, so a long peek would
     // make the window wider); the full text lives in the body, which wraps and
     // is clamped to the window width
-    tb.btn.setLabel(
-      `💭 ${this.t("think.label")} ${this.tf("think.chars", { n: full.length })}`,
-    );
+    tb.btn.setLabel(`💭 ${this.t("think.label")} ${this.tf("think.chars", { n: full.length })}`);
     tb.body.setText(full.trimStart());
   }
 
@@ -1347,10 +1304,7 @@ export class SoniaApp {
       chip.addCssClass("task-chip");
       chip.setHalign(Align.START);
       chip.setHexpand(false); // the chip hugs its content, it is not a banner bar
-      ico(
-        chip,
-        task.kind === "timer" ? "⏳" : task.kind === "watch" ? "🔁" : "💻",
-      );
+      ico(chip, task.kind === "timer" ? "⏳" : task.kind === "watch" ? "🔁" : "💻");
       const lbl = new Label(String(task.label ?? ""));
       lbl.setEllipsize(3);
       lbl.setProperty("max-width-chars", 46);
@@ -1361,9 +1315,7 @@ export class SoniaApp {
       chip.append(left);
       const x = new Button("✕");
       x.addCssClass("btn-flat");
-      x.setTooltipText(
-        this.tf("tasks.cancelAria", { label: task.label ?? "" }),
-      );
+      x.setTooltipText(this.tf("tasks.cancelAria", { label: task.label ?? "" }));
       x.onClick(() => {
         x.setSensitive(false);
         this.send({ type: "task_cancel", id: String(task.id) });
@@ -1372,15 +1324,10 @@ export class SoniaApp {
       chip.append(x);
       this.taskBar.append(chip);
       const due =
-        task.due_in_ms === undefined || task.due_in_ms === null
-          ? null
-          : Number(task.due_in_ms);
+        task.due_in_ms === undefined || task.due_in_ms === null ? null : Number(task.due_in_ms);
       return {
         id: String(task.id),
-        kind:
-          task.kind === "command" || task.kind === "watch"
-            ? task.kind
-            : "timer",
+        kind: task.kind === "command" || task.kind === "watch" ? task.kind : "timer",
         label: String(task.label ?? ""),
         due,
         at: Date.now(),
@@ -1414,7 +1361,7 @@ export class SoniaApp {
     const head = sel(new Label(this.t("cmd.head")));
     head.setHalign(Align.START);
     box.append(head);
-    const code = sel(new Label("$ " + command));
+    const code = sel(new Label(`$ ${command}`));
     code.addCssClass("code");
     code.setWrap(true);
     code.setXalign(0);
@@ -1446,10 +1393,8 @@ export class SoniaApp {
     this.scrollToBottom();
   }
 
-  private onCommandRequest(
-    ev: Extract<ServerEvent, { type: "command_request" }>,
-  ): void {
-    const c = this.cmdCard("req" + ev.id, ev.command);
+  private onCommandRequest(ev: Extract<ServerEvent, { type: "command_request" }>): void {
+    const c = this.cmdCard(`req${ev.id}`, ev.command);
     c.node.row.getChild()?.addCssClass("card-pending");
     c.head.setText(this.t("cmd.wants"));
     if (ev.reason && !c.why) {
@@ -1464,9 +1409,9 @@ export class SoniaApp {
     }
     if (!c.btns) {
       const b = new Box(Orientation.HORIZONTAL, 8);
-      const yes = new Button("✓ " + this.t("cmd.yes"));
+      const yes = new Button(`✓ ${this.t("cmd.yes")}`);
       yes.onClick(() => this.send({ type: "approve", id: ev.id, ok: true }));
-      const no = new Button("✕ " + this.t("cmd.no"));
+      const no = new Button(`✕ ${this.t("cmd.no")}`);
       no.onClick(() => this.send({ type: "approve", id: ev.id, ok: false }));
       b.append(yes);
       b.append(no);
@@ -1490,15 +1435,12 @@ export class SoniaApp {
     }
   }
 
-  private onCommandStart(
-    ev: Extract<ServerEvent, { type: "command_start" }>,
-  ): void {
-    const wanted = "$ " + ev.command;
-    let c = this.cards.get("run" + ev.id);
-    if (!c && this.lastReq && this.lastReq.code.getText() === wanted)
-      c = this.lastReq;
-    if (!c) c = this.cmdCard("run" + ev.id, ev.command);
-    this.cards.set("run" + ev.id, c);
+  private onCommandStart(ev: Extract<ServerEvent, { type: "command_start" }>): void {
+    const wanted = `$ ${ev.command}`;
+    let c = this.cards.get(`run${ev.id}`);
+    if (!c && this.lastReq && this.lastReq.code.getText() === wanted) c = this.lastReq;
+    if (!c) c = this.cmdCard(`run${ev.id}`, ev.command);
+    this.cards.set(`run${ev.id}`, c);
     this.lastReq = null;
     c.node.row.getChild()?.removeCssClass("card-pending");
     if (c.btns) {
@@ -1509,13 +1451,9 @@ export class SoniaApp {
     this.cardStatus(c, this.t("cmd.running"));
   }
 
-  private onCommandResult(
-    ev: Extract<ServerEvent, { type: "command_result" }>,
-  ): void {
+  private onCommandResult(ev: Extract<ServerEvent, { type: "command_result" }>): void {
     const c =
-      this.cards.get("run" + ev.id) ??
-      this.lastReq ??
-      this.cmdCard("run" + ev.id, ev.command);
+      this.cards.get(`run${ev.id}`) ?? this.lastReq ?? this.cmdCard(`run${ev.id}`, ev.command);
     this.lastReq = null;
     if (ev.status === "denied") {
       this.cardStatus(c, this.t("cmd.denied"));
@@ -1579,7 +1517,7 @@ export class SoniaApp {
     const box = new Box(Orientation.VERTICAL, 4);
     box.addCssClass("tool-card");
     const head = new Box(Orientation.HORIZONTAL, 7);
-    const name = sel(new Label("🔧 " + (ev.tool || "?")));
+    const name = sel(new Label(`🔧 ${ev.tool || "?"}`));
     name.addCssClass("tool-name");
     head.append(name);
     const sum = sel(new Label(ev.summary ?? ""));
@@ -1619,7 +1557,7 @@ export class SoniaApp {
     meta.addCssClass("dim");
     detail.append(meta);
     const toggle = new ToggleButton();
-    toggle.setLabel("▸ " + this.t("tool.details"));
+    toggle.setLabel(`▸ ${this.t("tool.details")}`);
     toggle.addCssClass("btn-flat");
     toggle.setHalign(Align.START);
     toggle.onToggled(() => detail.setVisible(toggle.getActive()));
@@ -1647,7 +1585,7 @@ export class SoniaApp {
 
   private onTool(ev: ToolEventLike): void {
     const c = this.toolCardFor(ev);
-    c.name.setText("🔧 " + (ev.tool || "?"));
+    c.name.setText(`🔧 ${ev.tool || "?"}`);
     if (ev.summary) c.sum.setText(ev.summary); // "end" has no summary
     const box = c.node.row.getChild()!;
     if (ev.phase === "start") {
@@ -1655,21 +1593,12 @@ export class SoniaApp {
       box.removeCssClass("tool-err");
       box.removeCssClass("tool-blocked");
       c.badge.setText(this.t("tool.running"));
-      const hasIn =
-        ev.args !== undefined &&
-        ev.args !== null &&
-        ev.args !== "" &&
-        ev.args !== "{}";
+      const hasIn = ev.args !== undefined && ev.args !== null && ev.args !== "" && ev.args !== "{}";
       c.inBlk.setVisible(hasIn);
       if (hasIn) c.inPre.setText(this.pretty(ev.args));
     } else {
       c.done = true;
-      for (const cls of [
-        "badge-run",
-        "badge-ok",
-        "badge-err",
-        "badge-blocked",
-      ]) {
+      for (const cls of ["badge-run", "badge-ok", "badge-err", "badge-blocked"]) {
         c.badge.removeCssClass(cls);
       }
       if (ev.error) {
@@ -1719,11 +1648,7 @@ export class SoniaApp {
     if (n < 1e3) return String(n);
     const [v, k] = n >= 1e6 ? [n / 1e6, "M"] : [n / 1e3, "k"];
     const [whole, frac] = v.toFixed(1).split(".");
-    return (
-      whole +
-      (frac === "0" ? "" : (this.i18n.locale === "it" ? "," : ".") + frac) +
-      k
-    );
+    return whole + (frac === "0" ? "" : (this.i18n.locale === "it" ? "," : ".") + frac) + k;
   }
 
   // ───────────────────────── models / voices / skills ─────────────────────────
@@ -1736,9 +1661,7 @@ export class SoniaApp {
     this.rebuildModelRows();
     this.modelBtn.setLabel(shortModel(current));
     this.modelBtn.setTooltipText(
-      current
-        ? `${this.t("model.api.title")}: ${current}`
-        : this.t("model.api.title"),
+      current ? `${this.t("model.api.title")}: ${current}` : this.t("model.api.title"),
     );
     this.piBadge.setVisible(this.viaPi);
     this.modelBtn.setSensitive(true);
@@ -1796,7 +1719,7 @@ export class SoniaApp {
   }
 
   private fillVoices(voices: string[], current: string, hz?: number): void {
-    const list = voices && voices.length ? voices : [current || "giovanni"];
+    const list = voices?.length ? voices : [current || "giovanni"];
     this.voiceList = list;
     const model = new StringList(list);
     const idx = Math.max(0, list.indexOf(current));
@@ -1807,9 +1730,7 @@ export class SoniaApp {
     this.comboVoice.setModel(model);
     this.comboVoice.setSelected(idx);
     this.prefsSyncing = false;
-    this.voiceMeta.setText(
-      this.tf("voice.meta", { hz: hz || this.rate, n: list.length }),
-    );
+    this.voiceMeta.setText(this.tf("voice.meta", { hz: hz || this.rate, n: list.length }));
   }
 
   /**
@@ -1879,9 +1800,7 @@ export class SoniaApp {
     // the socket can close right after the window did — the labels are gone then
     if (this.closed) return;
     this.state = s;
-    this.stateLabel.setText(
-      this.t("state." + s) !== "state." + s ? this.t("state." + s) : s,
-    );
+    this.stateLabel.setText(this.t(`state.${s}`) !== `state.${s}` ? this.t(`state.${s}`) : s);
     this.orb.queueDraw();
   }
 
@@ -1917,9 +1836,7 @@ export class SoniaApp {
     this.micOn = on;
     this.micBtn.setActive(on);
     this.micBtn.setIconName(
-      on
-        ? "microphone-sensitivity-high-symbolic"
-        : "microphone-disabled-symbolic",
+      on ? "microphone-sensitivity-high-symbolic" : "microphone-disabled-symbolic",
     );
     this.micBtn[on ? "removeCssClass" : "addCssClass"]("off");
     if (!on) this.micPeak = 0;
@@ -1928,9 +1845,7 @@ export class SoniaApp {
   private setVoiceOn(on: boolean): void {
     this.voiceOn = on;
     this.voiceBtn.setActive(on);
-    this.voiceBtn.setIconName(
-      on ? "audio-volume-high-symbolic" : "audio-volume-muted-symbolic",
-    );
+    this.voiceBtn.setIconName(on ? "audio-volume-high-symbolic" : "audio-volume-muted-symbolic");
   }
 
   // ───────────────────────────── audio wiring ─────────────────────────────
@@ -1950,18 +1865,13 @@ export class SoniaApp {
     }
     this.speaker.ensure(this.rate, spkTarget);
     if (announce) {
-      this.addEvent(
-        this.t(
-          useAec ? "aec.on" : this.opts.spkTarget ? "aec.speaker" : "aec.off",
-        ),
-      );
+      this.addEvent(this.t(useAec ? "aec.on" : this.opts.spkTarget ? "aec.speaker" : "aec.off"));
     }
   }
 
   private onMicFrame(f: MicFrame): void {
     if (this.closed) return; // one last frame can land after the window is gone
-    this.micPeak =
-      this.micOn && !this.takenOver ? Math.min(1, f.peak * 1.4) : 0;
+    this.micPeak = this.micOn && !this.takenOver ? Math.min(1, f.peak * 1.4) : 0;
     if (this.micOn && !this.takenOver) this.sendBinary(f.pcm);
   }
 
@@ -2044,8 +1954,7 @@ export class SoniaApp {
     // 🧹 ack discipline: everything the server sent before acknowledging the reset
     // belongs to the chat we just erased — drop it (4 s safety net for a lost ack).
     if (this.resetBarrier) {
-      if (ev.type === "chat_reset" || Date.now() >= this.resetBarrier)
-        this.resetBarrier = 0;
+      if (ev.type === "chat_reset" || Date.now() >= this.resetBarrier) this.resetBarrier = 0;
       else if ((STALE_ON_RESET as readonly string[]).includes(ev.type)) return;
     }
     this.onEvent(ev);
@@ -2068,39 +1977,23 @@ export class SoniaApp {
         this.prefsSyncing = true;
         this.swPi.setActive(!!ev.config.llm_via_pi);
         this.comboCmd.setSelected(
-          Math.max(
-            0,
-            ["ask", "auto", "off"].indexOf(ev.config.cmd_mode || "auto"),
-          ),
+          Math.max(0, ["ask", "auto", "off"].indexOf(ev.config.cmd_mode || "auto")),
         );
         this.swBarge.setActive(ev.config.barge_in);
         this.swHalf.setActive(ev.config.half_duplex);
         this.swThink.setActive(!!ev.config.thinking);
         this.comboDecision.setSelected(
-          Math.max(
-            0,
-            ["auto", "always", "off"].indexOf(
-              ev.config.decision_mode || "auto",
-            ),
-          ),
+          Math.max(0, ["auto", "always", "off"].indexOf(ev.config.decision_mode || "auto")),
         );
         this.swAec.setActive(this.aecOn);
         this.prefsSyncing = false;
         if (ev.rate !== this.rate) {
           this.rate = ev.rate;
-          this.speaker.ensure(
-            this.rate,
-            this.aecOn ? this.opts.aecSink : this.opts.spkTarget,
-          );
+          this.speaker.ensure(this.rate, this.aecOn ? this.opts.aecSink : this.opts.spkTarget);
         }
         if (!this.nodes.length) {
           for (const m of ev.history as HistoryMessage[]) {
-            this.addMsg(
-              m.role === "user" ? "user" : "bot",
-              m.content,
-              undefined,
-              m.id,
-            );
+            this.addMsg(m.role === "user" ? "user" : "bot", m.content, undefined, m.id);
           }
           if (!ev.history.length) this.addEvent(this.t("msg.ready"));
         }
@@ -2114,15 +2007,14 @@ export class SoniaApp {
         this.fillSkills(ev.skills || [], ev.skills_dir);
         this.setState(ev.state);
         if (ev.context) this.onContext(ev.context);
-        if (this.micOn && !this.takenOver && !this.mic.running)
-          this.mic.start();
+        if (this.micOn && !this.takenOver && !this.mic.running) this.mic.start();
         return;
       }
       case "state":
         this.setState(ev.state);
         return;
       case "partial":
-        this.partial.setText(ev.text ? "🎤 " + ev.text : "");
+        this.partial.setText(ev.text ? `🎤 ${ev.text}` : "");
         return;
       case "user":
         this.partial.setText("");
@@ -2144,16 +2036,14 @@ export class SoniaApp {
         return;
       case "assistant_cancel":
         if (this.botBubble) {
-          const cut = sel(new Label("✂ " + this.t("msg.cut")));
+          const cut = sel(new Label(`✂ ${this.t("msg.cut")}`));
           cut.addCssClass("chip-left");
           this.botBubble.bubble?.append(cut);
         }
         this.botBubble = null;
         return;
       case "latency":
-        this.botInfo(
-          this.tf("ev.latency", { a: ev.first_token_ms, b: ev.first_audio_ms }),
-        );
+        this.botInfo(this.tf("ev.latency", { a: ev.first_token_ms, b: ev.first_audio_ms }));
         return;
       case "flush":
         this.speaker.flush();
@@ -2274,7 +2164,7 @@ export class SoniaApp {
  */
 function shortModel(name: string): string {
   if (!name) return "…";
-  return name.length <= 14 ? name : name.slice(0, 13) + "…";
+  return name.length <= 14 ? name : `${name.slice(0, 13)}…`;
 }
 
 const ICON_DIR = path.join(import.meta.dir, "icons");

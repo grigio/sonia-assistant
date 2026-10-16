@@ -18,6 +18,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { SkillInfo } from "./events";
+import { writeJsonAtomic } from "./util";
 
 export type { SkillInfo };
 
@@ -47,7 +48,8 @@ export function parseFrontmatter(text: string): Record<string, string> {
     }
     if (!key) continue;
     const cur = out[key]!;
-    if (/^[|>][-+]?$/.test(cur)) out[key] = line.trim();       // first line of a block
+    if (/^[|>][-+]?$/.test(cur))
+      out[key] = line.trim(); // first line of a block
     else if (line.trim()) out[key] = `${cur} ${line.trim()}`.trim();
   }
   for (const k of Object.keys(out)) if (/^[|>][-+]?$/.test(out[k]!)) out[k] = "";
@@ -58,7 +60,7 @@ export function parseFrontmatter(text: string): Record<string, string> {
 export function clip(text: string, max: number): string {
   const t = text.trim();
   if (t.length <= max) return t;
-  return t.slice(0, max).trimEnd() + " …";
+  return `${t.slice(0, max).trimEnd()} …`;
 }
 
 export class Skills {
@@ -102,8 +104,8 @@ export class Skills {
       }
       const fm = parseFrontmatter(text);
       out.push({
-        name: fm["name"] || dirName,
-        description: clip(fm["description"] || "(no description)", 400),
+        name: fm.name || dirName,
+        description: clip(fm.description || "(no description)", 400),
         active: this.isActive(dirName),
       });
     }
@@ -119,7 +121,7 @@ export class Skills {
     this.active = new Set(names.map(String));
     try {
       fs.mkdirSync(path.dirname(this.storePath), { recursive: true });
-      fs.writeFileSync(this.storePath, JSON.stringify([...this.active].sort(), null, 1));
+      writeJsonAtomic(this.storePath, [...this.active].sort(), 1);
     } catch (e) {
       process.stdout.write(`\r\x1b[K[skills] cannot persist ${this.storePath}: ${e}\n`);
     }

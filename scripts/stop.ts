@@ -14,9 +14,10 @@
  * llama-server is external (README §Ports): only --all stops it.
  */
 
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { isHarnessProcess, parsePidFile, parseSsPid } from "./proc";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const RUN = path.join(ROOT, "data", "run");
@@ -31,7 +32,11 @@ const c = {
 const info = (m: string) => console.log(`${c.blue}[stop]${c.off} ${m}`);
 const note = (m: string) => console.log(`${c.gray}[stop]${c.off} ${m}`);
 const warn = (m: string) => console.log(`${c.yellow}[stop]${c.off} ${m}`);
-const die = (m: string): never => {
+// The explicit `: (m: string) => never` annotation on the *binding* (not just the
+// return type) is what lets TypeScript treat a call to it as terminating control flow:
+// without it, `if (v === undefined) die(...)` does not narrow `v` away and every
+// caller has to re-check. `scripts/**` is in the typecheck since v0.2.4.
+const die: (m: string) => never = (m) => {
   console.error(`${c.red}[stop]${c.off} ${m}`);
   process.exit(1);
 };
@@ -48,8 +53,9 @@ const USAGE = `bun run stop — stop what \`bun run start\` started (see scripts
 // ── arguments ────────────────────────────────────────────────────────────────
 const argv = process.argv.slice(2);
 
-const port0 = Number(process.env["HARNESS_PORT"] ?? 8095);
-if (!Number.isInteger(port0) || port0 < 1 || port0 > 65535) die(`HARNESS_PORT is not a port: ${port0}`);
+const port0 = Number(process.env.HARNESS_PORT ?? 8095);
+if (!Number.isInteger(port0) || port0 < 1 || port0 > 65535)
+  die(`HARNESS_PORT is not a port: ${port0}`);
 
 let port = port0;
 let grace = 10;
@@ -67,15 +73,37 @@ for (let i = 0; i < argv.length; i++) {
     return v;
   };
   switch (a) {
-    case "--audio": doAudio = true; break;
-    case "--all": doAudio = true; doAll = true; break;
-    case "--keep-window": keepWindow = true; break;
-    case "--status": case "-s": doStatus = true; break;
-    case "--dry-run": case "-n": dry = true; break;
-    case "--port": port = Number(next("--port")); break;
-    case "--grace": grace = Number(next("--grace")); break;
-    case "-h": case "--help": console.log(USAGE); process.exit(0); break;
-    default: die(`unknown argument ${a} (try --help)`);
+    case "--audio":
+      doAudio = true;
+      break;
+    case "--all":
+      doAudio = true;
+      doAll = true;
+      break;
+    case "--keep-window":
+      keepWindow = true;
+      break;
+    case "--status":
+    case "-s":
+      doStatus = true;
+      break;
+    case "--dry-run":
+    case "-n":
+      dry = true;
+      break;
+    case "--port":
+      port = Number(next("--port"));
+      break;
+    case "--grace":
+      grace = Number(next("--grace"));
+      break;
+    case "-h":
+    case "--help":
+      console.log(USAGE);
+      process.exit(0);
+      break;
+    default:
+      die(`unknown argument ${a} (try --help)`);
   }
 }
 if (!Number.isInteger(port) || port < 1 || port > 65535) die(`--port needs a port`);
@@ -127,34 +155,25 @@ function alive(pid: number): boolean {
 /** pid of the listener on `p`, null if none — same `ss -tlnpH "sport = :$p"` as stop.sh. */
 function pidOnPort(p: number): number | null {
   const r = spawnSync("ss", ["-tlnpH", `sport = :${p}`], { encoding: "utf8" });
-  const m = (r.stdout ?? "").match(/pid=(\d+)/);
-  return m ? Number(m[1]) : null;
+  return parseSsPid(r.stdout ?? "");
 }
 
 /**
  * Is this pid one of *our* harness processes (never an unrelated process on the port)?
- *
- * cwd/cmdline say "it is a cli.ts of this checkout"; the exe check says "and it really
- * *is* the interpreter running it" — without it any shell, editor or agent whose command
- * line merely quotes both the repo path and `cli.ts` (a grep, a `bun test` line, a paste)
- * would be treated as the harness and SIGTERMed. The bash original had that hole too.
+ * The rules live in proc.ts (pure, tested); the pid-file guards that need the *pid*
+ * itself are here.
  */
 function isHarness(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 1 || pid === process.pid) return false;
-  if (!alive(pid)) return false;
-  const exe = exeOf(pid);
-  if (exe !== "bun" && exe !== "node") return false;
-  const cwd = cwdOf(pid);
-  const cmd = cmdOf(pid);
-  return (cwd === ROOT || cwd.startsWith(`${ROOT}/`) || cmd.includes(ROOT)) && cmd.includes("cli.ts");
+  return isHarnessProcess({ exe: exeOf(pid), cwd: cwdOf(pid), cmd: cmdOf(pid) }, ROOT, alive(pid));
 }
 
 function harnessPids(): number[] {
   const found = new Set<number>();
   const pf = path.join(RUN, "harness.pid");
   try {
-    const v = Number(fs.readFileSync(pf, "utf8").trim());
-    if (Number.isInteger(v) && v > 0) found.add(v);
+    const pid = parsePidFile(fs.readFileSync(pf, "utf8"));
+    if (pid !== null) found.add(pid);
   } catch {
     /* no pid file */
   }
@@ -168,7 +187,9 @@ const CHROMIUM_STOP = `user-data-dir=${RUN}/chromium-profile`; // exact flag the
 const CHROMIUM_ANY = "chromium-profile"; // looser pattern, for --status (as stop.sh had it)
 
 function chromiumPids(pattern: string): number[] {
-  return allPids().filter((pid) => cmdOf(pid).includes(pattern)).sort((a, b) => a - b);
+  return allPids()
+    .filter((pid) => cmdOf(pid).includes(pattern))
+    .sort((a, b) => a - b);
 }
 
 // ── stop one pid: graceful TERM → wait grace → KILL ──────────────────────────
@@ -202,7 +223,9 @@ async function stopHarness(): Promise<void> {
   const pids = harnessPids();
   const held = pidOnPort(port);
   if (held !== null && !pids.includes(held)) {
-    warn(`:${port} is held by pid ${held} (${cmdOf(held).slice(0, 70)}) — not one of ours, leaving it alone`);
+    warn(
+      `:${port} is held by pid ${held} (${cmdOf(held).slice(0, 70)}) — not one of ours, leaving it alone`,
+    );
   }
   if (pids.length === 0) {
     note(`no harness running (port :${port} free)`);
@@ -276,11 +299,13 @@ async function status(): Promise<void> {
   console.log(ch.length > 0 ? `up (${ch[0]} pid)` : "down");
 
   if (fs.existsSync(path.join(ROOT, "scripts/start-audio-servers.sh"))) {
-    spawnSync("bash", [path.join(ROOT, "scripts/start-audio-servers.sh"), "status"], { stdio: "inherit" });
+    spawnSync("bash", [path.join(ROOT, "scripts/start-audio-servers.sh"), "status"], {
+      stdio: "inherit",
+    });
   }
 
   process.stdout.write(`${pad("llama")} `);
-  const base = (process.env["LLM_BASE_URL"] ?? "http://127.0.0.1:8080/v1").replace(/\/+$/, "");
+  const base = (process.env.LLM_BASE_URL ?? "http://127.0.0.1:8080/v1").replace(/\/+$/, "");
   const up = await fetch(`${base}/health`, { signal: AbortSignal.timeout(2000) })
     .then((r) => r.ok)
     .catch(() => false);
@@ -298,7 +323,10 @@ await stopHarness();
 
 if (doAudio) {
   if (dry) info("would stop the three audio.cpp servers (asr/tts/turn)");
-  else spawnSync("bash", [path.join(ROOT, "scripts/start-audio-servers.sh"), "stop"], { stdio: "inherit" });
+  else
+    spawnSync("bash", [path.join(ROOT, "scripts/start-audio-servers.sh"), "stop"], {
+      stdio: "inherit",
+    });
 } else {
   note("audio.cpp servers left running (use --audio to stop them)");
 }
@@ -307,7 +335,9 @@ if (doAll) {
   if (dry) {
     info("would stop llama-server (systemd --user unit)");
   } else {
-    const unit = spawnSync("systemctl", ["--user", "cat", "llama-server.service"], { stdio: "ignore" });
+    const unit = spawnSync("systemctl", ["--user", "cat", "llama-server.service"], {
+      stdio: "ignore",
+    });
     if (unit.status === 0) {
       info("stopping llama-server (systemd --user unit)");
       spawnSync("systemctl", ["--user", "stop", "llama-server.service"], { stdio: "inherit" });

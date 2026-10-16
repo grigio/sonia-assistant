@@ -18,10 +18,7 @@ export function checkTurnEnd(u: Utterance, cfg: Config, now: number): TurnEndAct
   const silenceMs = (now - u.lastSpeech) * 1000;
   if (silenceMs < cfg.minSilenceMs) return { kind: "none" };
 
-  if (
-    (u.decision === "listen" || u.decision === "speak") &&
-    u.partial.trim() !== u.decisionText
-  ) {
+  if ((u.decision === "listen" || u.decision === "speak") && u.partial.trim() !== u.decisionText) {
     // late partial words arrived during the pause (ASR lags ~0.5 s): judge again
     u.decision = null;
     u.listenUntil = 0;

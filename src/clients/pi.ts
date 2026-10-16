@@ -10,12 +10,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Config } from "../config";
-import { t, type Locale } from "../i18n";
-import { shlexSplit } from "../shlex";
-import { which, appendCapped, abortError } from "../util";
 import { contextsFromPiList, piModelRows } from "../context";
-import { piResultText, piToolInfo, toolEnd, toolStart } from "./toolcards";
+import { type Locale, t } from "../i18n";
+import { shlexSplit } from "../shlex";
+import { abortError, appendCapped, which } from "../util";
 import type { ChatMessage, StreamItem } from "./llm-types";
+import { piResultText, piToolInfo, toolEnd, toolStart } from "./toolcards";
 
 /** pi session ids of *our* caller must never leak into the assistant's own session */
 export const PI_DROP_ENV = ["PI_SESSION_ID", "PI_SESSION_FILE", "PI_SESSION_DIR"];
@@ -69,8 +69,8 @@ export class PiSession {
     for (const key of PI_DROP_ENV) delete env[key];
     if (this.cfg.piModel) {
       // we pass --model explicitly: don't let the caller's PI_PROVIDER/PI_MODEL disagree
-      delete env["PI_PROVIDER"];
-      delete env["PI_MODEL"];
+      delete env.PI_PROVIDER;
+      delete env.PI_MODEL;
     }
     return env;
   }
@@ -126,7 +126,7 @@ export class PiSession {
   flags(jsonMode = false, system = true): string[] {
     const cfg = this.cfg;
     const cmd = shlexSplit(cfg.piCmd);
-    const has = (flag: string) => cmd.some((arg) => arg === flag || arg.startsWith(flag + "="));
+    const has = (flag: string) => cmd.some((arg) => arg === flag || arg.startsWith(`${flag}=`));
     const flags: string[] = [];
     if (jsonMode && !has("--mode")) flags.push("--mode", "json");
     if (cfg.piModel && !has("--model")) flags.push("--model", cfg.piModel);
@@ -146,11 +146,7 @@ export class PiSession {
 
   /** `pi --list-models` → `["provider/id", …]`, cached for 300 s (never a failed run). */
   async modelIds(force = false): Promise<string[]> {
-    if (
-      !force &&
-      this.models &&
-      performance.now() - this.modelsAt < PiSession.MODELS_TTL_MS
-    ) {
+    if (!force && this.models && performance.now() - this.modelsAt < PiSession.MODELS_TTL_MS) {
       return [...this.models];
     }
     try {
@@ -175,15 +171,15 @@ export class PiSession {
   // ── prompts ──────────────────────────────────────────────────────────────
 
   private static assistantText(msg: Record<string, unknown>): string {
-    const content = msg["content"];
+    const content = msg.content;
     if (typeof content === "string") return content.trim();
     if (Array.isArray(content)) {
       return content
         .filter(
           (c): c is Record<string, unknown> =>
-            typeof c === "object" && c !== null && (c["type"] === undefined || c["type"] === "text"),
+            typeof c === "object" && c !== null && (c.type === undefined || c.type === "text"),
         )
-        .map((c) => String(c["text"] ?? "").trim())
+        .map((c) => String(c.text ?? "").trim())
         .filter(Boolean)
         .join(" ")
         .trim();
@@ -200,7 +196,7 @@ export class PiSession {
       if (Array.isArray(content)) {
         content = content
           .filter((c) => typeof c === "object" && c !== null)
-          .map((c) => String((c as Record<string, unknown>)["text"] ?? ""))
+          .map((c) => String((c as Record<string, unknown>).text ?? ""))
           .join(" ");
       }
       const text = String(content ?? "").trim();
@@ -341,48 +337,48 @@ export class PiSession {
         try {
           js = JSON.parse(line);
         } catch {
-          yield { kind: "text", text: line + "\n" }; // print mode: pi wrote plain text
+          yield { kind: "text", text: `${line}\n` }; // print mode: pi wrote plain text
           gotText = true;
           continue;
         }
-        const ev = (js["assistantMessageEvent"] as Record<string, unknown> | undefined) ?? {};
-        const seen = js["usage"] as PiUsage | undefined; // cumulative for this response
-        if (seen && typeof seen["input"] === "number") streamingUsage = seen;
-        if (ev["type"] === "text_delta") {
-          yield { kind: "text", text: String(ev["delta"] ?? "") };
+        const ev = (js.assistantMessageEvent as Record<string, unknown> | undefined) ?? {};
+        const seen = js.usage as PiUsage | undefined; // cumulative for this response
+        if (seen && typeof seen.input === "number") streamingUsage = seen;
+        if (ev.type === "text_delta") {
+          yield { kind: "text", text: String(ev.delta ?? "") };
           gotText = true;
-        } else if (ev["type"] === "thinking_delta") {
-          yield { kind: "reasoning", text: String(ev["delta"] ?? "") }; // UI only, not spoken
-        } else if (ev["type"] === "error") {
-          throw new Error(`pi: ${String(ev["error"] ?? ev["reason"])}`);
-        } else if (js["type"] === "tool_execution_start") {
+        } else if (ev.type === "thinking_delta") {
+          yield { kind: "reasoning", text: String(ev.delta ?? "") }; // UI only, not spoken
+        } else if (ev.type === "error") {
+          throw new Error(`pi: ${String(ev.error ?? ev.reason)}`);
+        } else if (js.type === "tool_execution_start") {
           yield {
             kind: "tool",
-            tool: toolStart("pi", String(js["toolCallId"] ?? ""), String(js["toolName"] ?? "?"), js["args"]),
+            tool: toolStart("pi", String(js.toolCallId ?? ""), String(js.toolName ?? "?"), js.args),
           };
-        } else if (js["type"] === "tool_execution_end") {
+        } else if (js.type === "tool_execution_end") {
           yield {
             kind: "tool",
             tool: toolEnd(
               "pi",
-              String(js["toolCallId"] ?? ""),
-              String(js["toolName"] ?? "?"),
-              piResultText(js["result"]),
-              piToolInfo(js["result"], cfg.locale),
-              Boolean(js["isError"]),
+              String(js.toolCallId ?? ""),
+              String(js.toolName ?? "?"),
+              piResultText(js.result),
+              piToolInfo(js.result, cfg.locale),
+              Boolean(js.isError),
             ),
           };
-        } else if (js["type"] === "message_end") {
-          const msg = (js["message"] as Record<string, unknown> | undefined) ?? {};
-          if (msg["role"] !== "assistant") continue;
-          if (msg["errorMessage"]) throw new Error(`pi: ${String(msg["errorMessage"]).slice(0, 300)}`);
+        } else if (js.type === "message_end") {
+          const msg = (js.message as Record<string, unknown> | undefined) ?? {};
+          if (msg.role !== "assistant") continue;
+          if (msg.errorMessage) throw new Error(`pi: ${String(msg.errorMessage).slice(0, 300)}`);
           final = PiSession.assistantText(msg) || final;
           // one usage item per assistant message (never per delta): feeds the context bar
-          const usage = (msg["usage"] as PiUsage | undefined) ?? streamingUsage;
+          const usage = (msg.usage as PiUsage | undefined) ?? streamingUsage;
           streamingUsage = null;
-          if (usage && typeof usage["input"] === "number") {
-            const output = typeof usage["output"] === "number" ? usage["output"] : 0;
-            yield { kind: "usage", prompt: usage["input"], completion: output };
+          if (usage && typeof usage.input === "number") {
+            const output = typeof usage.output === "number" ? usage.output : 0;
+            yield { kind: "usage", prompt: usage.input, completion: output };
           }
         }
       }
@@ -392,7 +388,9 @@ export class PiSession {
       if (rc) throw new Error(`pi exit ${rc}: ${err.join(" | ").slice(-300)}`);
       if (final && !gotText) yield { kind: "text", text: final };
       if (!gotText && !final) {
-        throw new Error("pi: no text in output" + (err.length ? ` — ${err.join(" | ").slice(-200)}` : ""));
+        throw new Error(
+          `pi: no text in output${err.length ? ` — ${err.join(" | ").slice(-200)}` : ""}`,
+        );
       }
     } finally {
       clearTimeout(timer);
@@ -406,7 +404,6 @@ export class PiSession {
 function parsePiModelIds(text: string): string[] {
   return piModelRows(text).map((row) => row.id);
 }
-
 
 /** Async-iterate the lines of a child's stdout. */
 function stdoutLines(proc: ReturnType<typeof spawn>): AsyncGenerator<string, void, unknown> {

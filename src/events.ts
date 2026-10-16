@@ -98,15 +98,15 @@ export type ServerEvent =
   /** `id` = the checkpoint of the history line this text became (none if it never did,
    *  e.g. an answer given to a pending command approval). */
   | { type: "user"; text: string; info?: string; id?: number }
-  | { type: "reasoning"; text: string }   // 💭 thinking delta → collapsed block in the UI
+  | { type: "reasoning"; text: string } // 💭 thinking delta → collapsed block in the UI
   | { type: "assistant"; text: string }
   /** The line is in the history now: `id` is its checkpoint (what ⟲ on it points at). */
   | { type: "assistant_done"; text: string; id?: number }
   | { type: "assistant_cancel" }
   | { type: "latency"; first_token_ms: number; first_audio_ms: number }
-  | { type: "context"; used: number; total: number }   // context bar: tokens used / n_ctx
+  | { type: "context"; used: number; total: number } // context bar: tokens used / n_ctx
   | { type: "flush" }
-  | { type: "chat_reset" }   // 🧹 ack: everything sent before this belongs to the erased chat
+  | { type: "chat_reset" } // 🧹 ack: everything sent before this belongs to the erased chat
   /**
    * Another window opened the app and took the single client slot: this page is now a
    * spectator — the server is about to close it, it must stop reconnecting (or the two
@@ -122,15 +122,15 @@ export type ServerEvent =
    */
   | { type: "chat_rewound"; ok: boolean; history: HistoryMessage[] }
   | { type: "event"; text: string }
-  | { type: "tasks"; tasks: TaskInfo[] }   // the banner: sent whole, on every change
+  | { type: "tasks"; tasks: TaskInfo[] } // the banner: sent whole, on every change
   | ToolEvent
   | { type: "command_request"; id: number; command: string; reason?: string }
   | { type: "command_resolved"; id: number }
   | { type: "command_start"; id: number; command: string; auto: boolean }
   | { type: "command_result"; id: number; command: string; status: string; output: string }
   | { type: "models"; models: string[]; current: string; via_pi?: boolean }
-  | { type: "voices"; voices: string[]; current: string; rate?: number }  // voice selector
-  | { type: "skills"; dir: string; skills: SkillInfo[] }   // rescan / after a toggle
+  | { type: "voices"; voices: string[]; current: string; rate?: number } // voice selector
+  | { type: "skills"; dir: string; skills: SkillInfo[] } // rescan / after a toggle
   | { type: "model_loading"; model: string }
   | { type: "model_ready"; model: string; seconds: number }
   | { type: "model_error"; model: string; current: string; error: string };
@@ -162,9 +162,9 @@ export type ClientCommand =
   | { type: "approve"; id: number; ok: boolean }
   | { type: "model"; model: string }
   | { type: "models_refresh"; force?: boolean }
-  | { type: "skills_refresh" }   // rescan SKILLS_DIR (a skill may have been installed)
-  | { type: "task_cancel"; id: string }   // ✕ on one chip of the banner
-  | { type: "skills_set"; active: string[] }   // the checkbox list the user just picked
+  | { type: "skills_refresh" } // rescan SKILLS_DIR (a skill may have been installed)
+  | { type: "task_cancel"; id: string } // ✕ on one chip of the banner
+  | { type: "skills_set"; active: string[] } // the checkbox list the user just picked
   | {
       type: "config";
       half_duplex?: boolean;

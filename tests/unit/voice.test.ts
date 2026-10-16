@@ -3,10 +3,11 @@
  * `<voice>.safetensors` per preset), an unknown pick changes nothing, an accepted one
  * is remembered in `data/voice` and restored at the next start.
  */
+
+import { afterAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, describe, expect, test } from "bun:test";
 import { Config } from "../../src/config";
 import { Assistant } from "../../src/harness/assistant";
 

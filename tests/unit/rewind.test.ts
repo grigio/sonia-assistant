@@ -22,8 +22,8 @@ import { afterAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Config } from "../../src/config";
 import type { ChatMessage, StreamItem } from "../../src/clients/llm";
+import { Config } from "../../src/config";
 import { Assistant } from "../../src/harness/assistant";
 import { Tools } from "../../src/tools";
 
@@ -111,9 +111,7 @@ describe("rewind to a checkpoint", () => {
     await threeTurns(a);
     const lines = a.chatLines();
 
-    expect(lines.map((m) => m.content)).toEqual([
-      "prima", "uno", "seconda", "due", "terza", "tre",
-    ]);
+    expect(lines.map((m) => m.content)).toEqual(["prima", "uno", "seconda", "due", "terza", "tre"]);
     expect(new Set(lines.map((m) => m.id)).size).toBe(lines.length); // one id per line
 
     expect(a.rewindTo(lines[3]!.id!)).toBe(true); // ⟲ on «due»
@@ -134,7 +132,11 @@ describe("rewind to a checkpoint", () => {
     expect(a.rewindTo(q)).toBe(true);
     // the line the button sits on is the one thing a ⟲ never drops
     expect(a.history.map((m) => m.content)).toEqual([
-      "prima", "uno", "seconda", "due", "domanda rimasta in sospeso",
+      "prima",
+      "uno",
+      "seconda",
+      "due",
+      "domanda rimasta in sospeso",
     ]);
 
     // the next question gets a line — and a checkpoint — of its own, so a later ⟲ can cut
@@ -142,19 +144,31 @@ describe("rewind to a checkpoint", () => {
     // strict user/assistant alternation, and the transcript wants one id per line)
     await turn(a, "seconda domanda");
     expect(a.chatLines().map((m) => m.content)).toEqual([
-      "prima", "uno", "seconda", "due", "domanda rimasta in sospeso", "seconda domanda", "risposta",
+      "prima",
+      "uno",
+      "seconda",
+      "due",
+      "domanda rimasta in sospeso",
+      "seconda domanda",
+      "risposta",
     ]);
     expect(new Set(a.chatLines().map((m) => m.id)).size).toBe(a.chatLines().length);
     expect(
-      requests.at(-1)!.some(
-        (m) => m.role === "user" && m.content === "domanda rimasta in sospeso seconda domanda",
-      ),
+      requests
+        .at(-1)!
+        .some(
+          (m) => m.role === "user" && m.content === "domanda rimasta in sospeso seconda domanda",
+        ),
     ).toBe(true); // …and never two user messages in a row on the wire
 
     // …and ⟲ on the older question now cuts the newer one away with its answer
     expect(a.rewindTo(q)).toBe(true);
     expect(a.history.map((m) => m.content)).toEqual([
-      "prima", "uno", "seconda", "due", "domanda rimasta in sospeso",
+      "prima",
+      "uno",
+      "seconda",
+      "due",
+      "domanda rimasta in sospeso",
     ]);
   });
 
@@ -165,13 +179,11 @@ describe("rewind to a checkpoint", () => {
     a.addMessage({ role: "tool", tool_call_id: "c1", content: "corpo della skill" });
     a.addMessage({ role: "assistant", content: "fatto" });
     // the tool round's partial text *is* a line the page can ⟲ (it has string content)
-    expect(a.chatLines().map((m) => m.content)).toEqual([
-      "leggi la skill", "certo", "fatto",
-    ]);
+    expect(a.chatLines().map((m) => m.content)).toEqual(["leggi la skill", "certo", "fatto"]);
 
     expect(a.rewindTo(cp(a, "certo"))).toBe(true);
     expect(a.history.some((m) => m.tool_calls?.length)).toBe(false); // c2 was never answered
-    expect(a.history.some((m) => m.role === "tool")).toBe(false);    // …nor c1's result
+    expect(a.history.some((m) => m.role === "tool")).toBe(false); // …nor c1's result
     // the calls go because their answers went with the cut — but the clicked line stays
     expect(a.history.map((m) => m.content)).toEqual(["leggi la skill", "certo"]);
     expect(a.chatLines().map((m) => m.content)).toEqual(["leggi la skill", "certo"]);
@@ -184,8 +196,8 @@ describe("rewind to a checkpoint", () => {
     const before = structuredClone(a.history);
 
     expect(a.rewindTo(999_999)).toBe(false);
-    expect(a.rewindTo(0)).toBe(false);            // ids start at 1 and are never reused
-    expect(a.history).toEqual(before);            // not one message touched
+    expect(a.rewindTo(0)).toBe(false); // ids start at 1 and are never reused
+    expect(a.history).toEqual(before); // not one message touched
     expect(a.chatLines()).toHaveLength(4);
   });
 
@@ -212,7 +224,7 @@ describe("rewind to a checkpoint", () => {
     };
 
     expect(a.rewindTo(keep)).toBe(true);
-    expect(a.resp).toBeNull();                   // the half-turn is over, not paused
+    expect(a.resp).toBeNull(); // the half-turn is over, not paused
     expect(a.history.map((m) => m.content)).toEqual(["prima", "uno", "seconda", "due"]);
     expect(a.history.some((m) => m.content === "sto rispondendo")).toBe(false);
   });
@@ -239,13 +251,17 @@ describe("rewind to a checkpoint", () => {
     };
 
     expect(a.rewindTo(cp(a, "sto rispondendo"))).toBe(true);
-    expect(a.resp).toBeNull();                   // the answer is over, the question is not
+    expect(a.resp).toBeNull(); // the answer is over, the question is not
     // `cancelResponse` had already cut the in-flight turn off the end of the history:
     // the checkpoint's own cut is the one that counts, so the clicked line is put back
     expect(a.history.map((m) => m.content)).toEqual([
-      "prima", "uno", "seconda", "due", "sto rispondendo",
+      "prima",
+      "uno",
+      "seconda",
+      "due",
+      "sto rispondendo",
     ]);
-    expect(a.history.at(-1)!.role).toBe("user");  // kept, dangling and all
+    expect(a.history.at(-1)!.role).toBe("user"); // kept, dangling and all
   });
 
   test("like 🧹, it bumps the epoch: late tool events belong to the dropped part", async () => {
@@ -264,7 +280,7 @@ describe("rewind to a checkpoint", () => {
     a.cfg.llmViaPi = true;
 
     expect(a.rewindTo(cp(a, "uno"))).toBe(true);
-    expect(piRewinds.n).toBe(1);                 // new conv, re-seeded with the kept turns
+    expect(piRewinds.n).toBe(1); // new conv, re-seeded with the kept turns
     expect(a.history.map((m) => m.content)).toEqual(["prima", "uno"]);
   });
 });

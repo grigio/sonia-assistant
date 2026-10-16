@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { ThinkTagFilter, OPEN_TAGS, CLOSE_TAGS } from "../../src/clients/think";
+import { CLOSE_TAGS, OPEN_TAGS, ThinkTagFilter } from "../../src/clients/think";
 
 const [OPEN, OPEN2] = OPEN_TAGS;
 const [CLOSE, CLOSE2] = CLOSE_TAGS;
@@ -45,9 +45,16 @@ describe("ThinkTagFilter", () => {
   });
 
   test("a tag split across chunks is still a tag", () => {
-    const chunks = ["sto per ", "pensare…",      // text before the block
-                    OPEN.slice(0, 2), OPEN.slice(2), "un momento", CLOSE,
-                    "Risposta fin", "ale."];     // …and the answer after it
+    const chunks = [
+      "sto per ",
+      "pensare…", // text before the block
+      OPEN.slice(0, 2),
+      OPEN.slice(2),
+      "un momento",
+      CLOSE,
+      "Risposta fin",
+      "ale.",
+    ]; // …and the answer after it
     expect(reasoning(chunks)).toBe("un momento");
     expect(text(chunks)).toBe("sto per pensare…Risposta finale.");
   });

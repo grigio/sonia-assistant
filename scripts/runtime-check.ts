@@ -68,18 +68,18 @@ function audioProbe(url: string) {
   return async (): Promise<string> => {
     const { status, json } = await get(url);
     if (status !== 200) throw new Error(`HTTP ${status}`);
-    const st = json?.["status"];
+    const st = json?.status;
     if (st !== undefined && st !== "ok") throw new Error(`status=${String(st)}`);
     const parts = [
-      json?.["backend"] !== undefined ? String(json["backend"]) : "unknown backend",
-      json?.["models"] !== undefined ? `${String(json["models"])} model(s)` : null,
+      json?.backend !== undefined ? String(json.backend) : "unknown backend",
+      json?.models !== undefined ? `${String(json.models)} model(s)` : null,
     ].filter((p): p is string => p !== null);
     return parts.join(" · ");
   };
 }
 
 const llamaHealth = healthUrl(cfg.llmBaseUrl.replace(/\/v1\/?$/, ""));
-const harnessUrl = (process.env["HARNESS_URL"] ?? "http://127.0.0.1:8095").replace(/\/+$/, "") + "/";
+const harnessUrl = `${(process.env.HARNESS_URL ?? "http://127.0.0.1:8095").replace(/\/+$/, "")}/`;
 
 const checks: Check[] = [
   {
@@ -94,14 +94,29 @@ const checks: Check[] = [
       const { status, json } = await get(llamaHealth);
       if (status === 503) throw new Error("HTTP 503 — still loading a model?");
       if (status !== 200) throw new Error(`HTTP ${status}`);
-      const st = json?.["status"];
+      const st = json?.status;
       if (st !== undefined && st !== "ok") throw new Error(`status=${String(st)}`);
       return `model=${cfg.llmModel}`;
     },
   },
-  { name: "asr", url: healthUrl(cfg.asrUrl), hint: "scripts/start-audio-servers.sh start", probe: audioProbe(healthUrl(cfg.asrUrl)) },
-  { name: "tts", url: healthUrl(cfg.ttsUrl), hint: "scripts/start-audio-servers.sh start", probe: audioProbe(healthUrl(cfg.ttsUrl)) },
-  { name: "turn", url: healthUrl(cfg.turnUrl), hint: "scripts/start-audio-servers.sh start", probe: audioProbe(healthUrl(cfg.turnUrl)) },
+  {
+    name: "asr",
+    url: healthUrl(cfg.asrUrl),
+    hint: "scripts/start-audio-servers.sh start",
+    probe: audioProbe(healthUrl(cfg.asrUrl)),
+  },
+  {
+    name: "tts",
+    url: healthUrl(cfg.ttsUrl),
+    hint: "scripts/start-audio-servers.sh start",
+    probe: audioProbe(healthUrl(cfg.ttsUrl)),
+  },
+  {
+    name: "turn",
+    url: healthUrl(cfg.turnUrl),
+    hint: "scripts/start-audio-servers.sh start",
+    probe: audioProbe(healthUrl(cfg.turnUrl)),
+  },
   {
     name: "harness",
     url: harnessUrl,
@@ -121,7 +136,13 @@ const results: Result[] = await Promise.all(
     if (check.skip) return { check, ok: true, skipped: true, detail: check.skip, ms: 0 };
     const t = performance.now();
     try {
-      return { check, ok: true, skipped: false, detail: await check.probe(), ms: performance.now() - t };
+      return {
+        check,
+        ok: true,
+        skipped: false,
+        detail: await check.probe(),
+        ms: performance.now() - t,
+      };
     } catch (e) {
       return { check, ok: false, skipped: false, detail: reason(e), ms: performance.now() - t };
     }
@@ -134,9 +155,7 @@ console.log(dim(`runtime-check — endpoints from .env (HARNESS_URL overrides th
 for (const r of results) {
   const mark = r.skipped ? dim("−") : r.ok ? green("✓") : red("✗");
   const url = r.check.url.padEnd(urlW);
-  const detail = r.skipped
-    ? dim(r.detail)
-    : `${r.detail}${dim(` · ${r.ms.toFixed(0)} ms`)}`;
+  const detail = r.skipped ? dim(r.detail) : `${r.detail}${dim(` · ${r.ms.toFixed(0)} ms`)}`;
   console.log(`  ${mark} ${r.check.name.padEnd(nameW)}  ${url}  ${r.ok ? detail : red(r.detail)}`);
   if (!r.ok) console.log(`    ${dim("↳ start it:")} ${r.check.hint}`);
 }

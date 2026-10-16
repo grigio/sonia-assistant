@@ -18,7 +18,9 @@ export type ThinkPart = { kind: "reasoning" | "text"; text: string };
 /** "<" as a variable: keeps the tag literals out of the source (docs/tools mangle them). */
 const LT = "<";
 
-/** Opening / closing tags we recognise: whichever comes first in the stream wins. */
+/** Opening / closing tags we recognise: whichever comes first in the stream wins.
+ *  Written as concatenations, not template literals, on purpose: `as const` keeps these
+ *  literal types, which the tests assert against. */
 export const OPEN_TAGS = [LT + "think>", "```think"] as const;
 export const CLOSE_TAGS = [LT + "/think>", "```"] as const;
 

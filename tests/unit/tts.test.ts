@@ -30,9 +30,7 @@ describe("TTS.stream — a server that is not there", () => {
     await new Promise<void>((r) => srv.close(() => r()));
 
     const tts = new TTS(`http://127.0.0.1:${port}`, "pocket-it", "eponine");
-    await expect(collect(tts.stream("ciao"))).rejects.toThrow(
-      `TTS http://127.0.0.1:${port}`,
-    );
+    await expect(collect(tts.stream("ciao"))).rejects.toThrow(`TTS http://127.0.0.1:${port}`);
   });
 
   test("an aborted request stays an AbortError (a barge-in, not a broken server)", async () => {

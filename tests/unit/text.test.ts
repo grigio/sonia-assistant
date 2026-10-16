@@ -6,13 +6,13 @@
 import { describe, expect, test } from "bun:test";
 import {
   BACKCHANNELS,
-  YES_WORDS,
-  NO_WORDS,
   classifyYesNo,
   echoRatio,
   hasWords,
   isBackchannel,
+  NO_WORDS,
   words,
+  YES_WORDS,
 } from "../../src/harness/text";
 
 describe("words / hasWords", () => {

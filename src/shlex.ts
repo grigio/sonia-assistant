@@ -1,15 +1,25 @@
 /** POSIX-ish shell word splitting: single/double quotes, backslash escapes, no comments. */
 
-export function shlexSplit(s: string): string[] {
-  const tokens: string[] = [];
+/** One word, plus how many shell-separator characters reached it from *outside* quotes.
+ *  The policy layer needs to tell `a;b` (two commands) from merely a quoted "a;b.txt". */
+export interface ShlexWord {
+  word: string;
+  /** count of unquoted `;` / `&` / `|` characters that make up this word */
+  bare: number;
+}
+
+export function shlexSplitWords(s: string): ShlexWord[] {
+  const out: ShlexWord[] = [];
   let cur = "";
+  let bare = 0;
   let inToken = false;
   let i = 0;
 
   const push = () => {
     if (inToken) {
-      tokens.push(cur);
+      out.push({ word: cur, bare });
       cur = "";
+      bare = 0;
       inToken = false;
     }
   };
@@ -55,8 +65,13 @@ export function shlexSplit(s: string): string[] {
     }
     inToken = true;
     cur += c;
+    if (c === ";" || c === "&" || c === "|") bare += 1; // outside quotes: control flow
     i++;
   }
   push();
-  return tokens;
+  return out;
+}
+
+export function shlexSplit(s: string): string[] {
+  return shlexSplitWords(s).map((w) => w.word);
 }

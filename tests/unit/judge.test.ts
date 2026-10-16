@@ -1,6 +1,6 @@
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { Config } from "../../src/config";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { LLM } from "../../src/clients/llm";
+import { Config } from "../../src/config";
 
 /** bun test runs every file in one process: remember the real `fetch` here, so an
  *  `afterEach` can drop its own mock without leaving `globalThis.fetch` undefined for
@@ -15,8 +15,7 @@ function mockFetch(reply: unknown | ((url: string, body: any) => unknown) = { ch
     const u = String(url);
     const body = init?.body ? JSON.parse(String(init.body)) : null;
     calls.push({ url: u, body });
-    const payload =
-      typeof reply === "function" ? reply(u, body) : reply;
+    const payload = typeof reply === "function" ? reply(u, body) : reply;
     if ((payload as { http?: number }).http) {
       const p = payload as { http: number; text?: string };
       return new Response(p.text ?? "boom", { status: p.http });

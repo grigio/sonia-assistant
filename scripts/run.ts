@@ -24,15 +24,17 @@
  * we spawn inherits that environment — the hand-rolled reader run.sh had is obsolete.
  */
 
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
 import { Config } from "../src/config";
+import { installCrashGuards } from "../src/log";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 process.chdir(ROOT);
+installCrashGuards(); // the wrapper dying on a stray rejection would strand the child
 
 const cfg = Config.fromEnv();
 

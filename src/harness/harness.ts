@@ -13,13 +13,13 @@
 
 import readline from "node:readline";
 import { LiveTranscription } from "../clients/audiocpp";
+import { t as msg } from "../i18n"; // `t` is a timestamp in the frame loop below
+import { concatBytes, sleep } from "../util";
 import { Assistant, type Utterance } from "./assistant";
 import { bargeInterrupts, bargeVerdict } from "./barge-in";
-import { checkTurnEnd } from "./turn";
-import { hasWords } from "./text";
 import { isAbortError, now } from "./queues";
-import { t as msg } from "../i18n";   // `t` is a timestamp in the frame loop below
-import { concatBytes, sleep } from "../util";
+import { hasWords } from "./text";
+import { checkTurnEnd } from "./turn";
 
 const FRAME_MS = 32; // 512 samples @ 16 kHz
 
@@ -153,7 +153,7 @@ export class Harness extends Assistant {
     } else if (this.resp !== null) {
       if (!this.resp.audioStarted) {
         // the assistant hasn't spoken yet: the user is just continuing their turn
-        this.pendingPrefix = (this.pendingPrefix + " " + this.resp.userText).trim();
+        this.pendingPrefix = `${this.pendingPrefix} ${this.resp.userText}`.trim();
         this.cancelResponse(false, true);
         this.log("  ↺ user continued — merging with previous turn");
       } else if (this.cfg.bargeIn) {
@@ -177,7 +177,7 @@ export class Harness extends Assistant {
     if (this.utt && this.utt.gen === gen) {
       this.utt.partial = text;
       this.status(`🎤 ${text.trim()}`);
-      this.emit({ type: "partial", text: (this.pendingPrefix + " " + text).trim() });
+      this.emit({ type: "partial", text: `${this.pendingPrefix} ${text}`.trim() });
     }
   }
 
@@ -209,7 +209,7 @@ export class Harness extends Assistant {
       if (text) lines.unshift(`${m.role}: ${text}`);
     }
     const tail = lines.length ? `${lines.join("\n")}\n` : "";
-    const text = (this.pendingPrefix + " " + u.partial).trim();
+    const text = `${this.pendingPrefix} ${u.partial}`.trim();
     let verdict: "listen" | "speak";
     try {
       verdict = await this.llm.decide(this.decisionPrompt, tail, text, signal);
@@ -281,7 +281,7 @@ export class Harness extends Assistant {
     if (this.gen > u.gen && !u.barge && this.resp === null) {
       // the user started talking again while we were flushing: same turn, keep going
       if (hasWords(text)) {
-        this.pendingPrefix = (this.pendingPrefix + " " + text).trim();
+        this.pendingPrefix = `${this.pendingPrefix} ${text}`.trim();
         this.log(`  ↺ user continued — «${text}» carried into the next utterance`);
       }
       return;
@@ -292,7 +292,10 @@ export class Harness extends Assistant {
       const spoken = this.resp.spoken.join(" ");
       const verdict = bargeVerdict(text, spoken, this.cfg);
       if (verdict !== "interrupt") {
-        const what = msg(this.cfg.locale, verdict === "resume-echo" ? "evt.echo" : "evt.backchannel");
+        const what = msg(
+          this.cfg.locale,
+          verdict === "resume-echo" ? "evt.echo" : "evt.backchannel",
+        );
         this.log(`  ▶ resuming (${what}: «${text}»)`);
         this.emit({
           type: "event",
@@ -314,11 +317,13 @@ export class Harness extends Assistant {
       return;
     }
 
-    const full = (this.pendingPrefix + " " + text).trim();
+    const full = `${this.pendingPrefix} ${text}`.trim();
     this.pendingPrefix = "";
     const silence = (tEnd - u.lastSpeech) * 1000;
     this.log(`🗣  ${full}`);
-    this.log(`   turn end: ${reason}, gap ${silence.toFixed(0)} ms, ASR flush ${asrMs.toFixed(0)} ms`);
+    this.log(
+      `   turn end: ${reason}, gap ${silence.toFixed(0)} ms, ASR flush ${asrMs.toFixed(0)} ms`,
+    );
     // the `user` line goes out from inside startResponse(): it can only carry the
     // checkpoint id of the history message it becomes there
     this.startResponse(
@@ -332,4 +337,3 @@ export class Harness extends Assistant {
     );
   }
 }
-

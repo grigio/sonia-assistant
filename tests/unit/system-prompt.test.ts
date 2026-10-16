@@ -2,11 +2,11 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { PI_SYSTEM_TAIL } from "../../src/clients/pi";
 import { Config } from "../../src/config";
 import { Assistant } from "../../src/harness/assistant";
+import { type Locale, t } from "../../src/i18n";
 import { Skills } from "../../src/skills";
-import { t, type Locale } from "../../src/i18n";
-import { PI_SYSTEM_TAIL } from "../../src/clients/pi";
 
 /** The block `Skills.block()` appends — the persona file itself never carries it. */
 const BLOCK_MARK = "instruction packages with scripts, in";
@@ -136,7 +136,7 @@ describe("the locale's language default is the last line of the prompt", () => {
 describe("the persona knows where the newest item of a web list is", () => {
   const persona = fs.readFileSync(Config.fromEnv().systemPromptFile, "utf-8");
 
-  test("\"the newest post\" comes from the page's order, not from its text", () => {
+  test('"the newest post" comes from the page\'s order, not from its text', () => {
     // Skill-agnostic on purpose: the rule hands the model a command of its own (curl + a
     // grep of the page's own links), never a skill's script nor its flags — measured on
     // Qwen3.5-4B-MTP with grigio.org (data/logs/harness.log 12:31:37 and 12:48:15 named a post

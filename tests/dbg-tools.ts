@@ -116,7 +116,12 @@ function toolEvents(ev: any[]): any[] {
   return ev.filter((e) => e && (e.type === "tool" || String(e.type).startsWith("command_")));
 }
 
-async function scenario(label: string, c: Ctx, text: string, extra?: () => Promise<void>): Promise<void> {
+async function scenario(
+  label: string,
+  c: Ctx,
+  text: string,
+  extra?: () => Promise<void>,
+): Promise<void> {
   console.log(`\n── ${label} ─────────────────────────────────────`);
   const before = (await c.js("window.__ev.length")) as number;
   await c.js(`send({type:'text', text:${JSON.stringify(text)}})`);
@@ -133,7 +138,12 @@ async function scenario(label: string, c: Ctx, text: string, extra?: () => Promi
   await sleep(1500);
   const d: any = (await c.js(DUMP)) || { ev: [], cards: [], cmds: [], msgs: [], err: [] };
   const sent = toolEvents(d.ev.slice(before));
-  console.log(`  events received after the turn: ${d.ev.slice(before).map((e: any) => e.type).join(",")}`);
+  console.log(
+    `  events received after the turn: ${d.ev
+      .slice(before)
+      .map((e: any) => e.type)
+      .join(",")}`,
+  );
   console.log(`  tool/command events sent: ${sent.length}`);
   for (const e of sent) console.log(`    → ${JSON.stringify(e).slice(0, 220)}`);
   console.log(`  DOM .tool cards: ${d.cards.length}`);
@@ -151,7 +161,8 @@ async function main(): Promise<number> {
       const r = await fetch(`${args.cdp.replace(/\/+$/, "")}/json/list`);
       if (r.ok) {
         const list = (await r.json()) as { type?: string; webSocketDebuggerUrl?: string }[];
-        pages = list.filter((t) => t.type === "page" && t.webSocketDebuggerUrl)
+        pages = list
+          .filter((t) => t.type === "page" && t.webSocketDebuggerUrl)
           .map((t) => ({ webSocketDebuggerUrl: t.webSocketDebuggerUrl! }));
         if (pages.length) break;
       }
@@ -193,14 +204,23 @@ async function main(): Promise<number> {
   if (want("B")) {
     await c.js("if (piChk.checked) piChk.click()");
     await c.until("!piChk.checked", "api leg");
-    await scenario("B · API leg, run_command + approval", c, "Esegui il comando: date +%H:%M:%S", async () => {
-      const got = await c.until("!!document.querySelector('.cmd .btns button.ok')", "approval button", 90);
-      if (got) await c.js("document.querySelector('.cmd .btns button.ok').click()");
-      else
-        console.log(
-          "  (no approval card — commands are not in `ask` mode, run_command executed immediately)",
+    await scenario(
+      "B · API leg, run_command + approval",
+      c,
+      "Esegui il comando: date +%H:%M:%S",
+      async () => {
+        const got = await c.until(
+          "!!document.querySelector('.cmd .btns button.ok')",
+          "approval button",
+          90,
         );
-    });
+        if (got) await c.js("document.querySelector('.cmd .btns button.ok').click()");
+        else
+          console.log(
+            "  (no approval card — commands are not in `ask` mode, run_command executed immediately)",
+          );
+      },
+    );
   }
 
   // C: pi leg tool
@@ -215,7 +235,11 @@ async function main(): Promise<number> {
     await c.js("if (piChk.checked) piChk.click()");
     await c.until("!piChk.checked", "api leg");
     await scenario("E1 · API leg, get_datetime", c, "Che ore sono? Usa lo strumento get_datetime.");
-    await scenario("E2 · API leg, get_datetime again", c, "Dimmi di nuovo l'ora, con lo strumento get_datetime.");
+    await scenario(
+      "E2 · API leg, get_datetime again",
+      c,
+      "Dimmi di nuovo l'ora, con lo strumento get_datetime.",
+    );
   }
   if (want("D")) {
     await c.js("if (!piChk.checked) piChk.click()");
@@ -228,8 +252,10 @@ async function main(): Promise<number> {
   }
 
   const d: any = await c.js(DUMP);
-  console.log("\n" + "=".repeat(60));
-  console.log(`totals: tool events ${toolEvents(d.ev).length}, .tool cards ${d.cards.length}, .cmd cards ${d.cmds.length}`);
+  console.log(`\n${"=".repeat(60)}`);
+  console.log(
+    `totals: tool events ${toolEvents(d.ev).length}, .tool cards ${d.cards.length}, .cmd cards ${d.cmds.length}`,
+  );
   console.log(`page errors: ${d.err.length ? JSON.stringify(d.err, null, 2) : "none"}`);
   ws.close();
   return 0;

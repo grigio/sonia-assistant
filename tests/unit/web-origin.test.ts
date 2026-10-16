@@ -54,7 +54,11 @@ describe("originAllowed", () => {
   });
 
   test("--host <a real address>: that address, and only it", () => {
-    expect(originAllowed("http://192.168.1.88:8095", "192.168.1.88:8095", "192.168.1.88")).toBe(true);
-    expect(originAllowed("http://192.168.1.89:8095", "192.168.1.89:8095", "192.168.1.88")).toBe(false);
+    expect(originAllowed("http://192.168.1.88:8095", "192.168.1.88:8095", "192.168.1.88")).toBe(
+      true,
+    );
+    expect(originAllowed("http://192.168.1.89:8095", "192.168.1.89:8095", "192.168.1.88")).toBe(
+      false,
+    );
   });
 });

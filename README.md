@@ -223,8 +223,10 @@ skills never reach the prompt and `read_skill` refuses them.
 Everything is **localhost by design** — no login, no TLS: do not pass a non-loopback
 `--host` without your own protection in front of it. `run_command` spawns `bash -c` **as
 your user** with no sandbox; the policy in [`src/command-policy.ts`](src/command-policy.ts)
-classes read-only commands as safe, while shell metacharacters and sensitive paths
-(`.ssh`, keys, `.env`) always stop at the approval prompt in `CMD_MODE=ask`.
+classes read-only commands and skill lines as safe, while shell metacharacters and
+sensitive paths (`.ssh`, keys, `.env`) always stop at the approval prompt in
+`CMD_MODE=ask` — and are **refused outright in `CMD_MODE=auto`**, the unattended mode
+where there is no one to ask.
 
 The `/ws` WebSocket — the control channel of the whole app — accepts a connection **only
 from this server's own origin** (`originAllowed` in [`src/web.ts`](src/web.ts)): browsers

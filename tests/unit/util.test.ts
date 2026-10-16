@@ -1,16 +1,21 @@
 /**
- * `src/util.ts` — the primitives everything else leans on: cancellation, timeouts and
- * the bounded string accumulator (the one that keeps a `yes`-style command from eating
- * the heap).
+ * `src/util.ts` — the primitives everything else leans on: cancellation, timeouts, the
+ * bounded string accumulator (the one that keeps a `yes`-style command from eating the
+ * heap) and the crash-safe JSON write.
  */
+
 import { describe, expect, test } from "bun:test";
-import { sleep } from "../../src/util";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   abortError,
   appendCapped,
   concatBytes,
+  sleep,
   timeoutSignal,
   which,
+  writeJsonAtomic,
 } from "../../src/util";
 
 describe("abortError / sleep", () => {
@@ -89,12 +94,42 @@ describe("which", () => {
   });
 
   test("a PATH full of holes does not throw", () => {
-    const old = process.env["PATH"];
-    process.env["PATH"] = "/nonexistent:/alsonot";
+    const old = process.env.PATH;
+    process.env.PATH = "/nonexistent:/alsonot";
     try {
       expect(which("sh")).toBeNull();
     } finally {
-      process.env["PATH"] = old;
+      process.env.PATH = old;
     }
+  });
+});
+
+describe("writeJsonAtomic", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fd-util-"));
+
+  test("writes the JSON a later read parses back — pretty, store files are for humans too", () => {
+    const file = path.join(dir, "notes.json");
+    writeJsonAtomic(file, [{ text: "una nota" }, 2], 1);
+    expect(JSON.parse(fs.readFileSync(file, "utf-8"))).toEqual([{ text: "una nota" }, 2]);
+    // indent 1 = one space per level: a *string* indent ("1") would repeat per depth
+    // and produce junk that no longer parses (`[\n1{`) — the number is load-bearing
+    expect(fs.readFileSync(file, "utf-8")).toContain("[\n {");
+  });
+
+  test("rewrites replace the target outright and leave no `.tmp` litter", () => {
+    const file = path.join(dir, "skills.json");
+    writeJsonAtomic(file, ["a"], 1);
+    writeJsonAtomic(file, ["a", "b"], 1);
+    expect(JSON.parse(fs.readFileSync(file, "utf-8"))).toEqual(["a", "b"]);
+    expect(fs.readdirSync(dir).sort()).toEqual(["notes.json", "skills.json"]);
+  });
+
+  test("a torn previous write does not break the next save (it reserves the name)", () => {
+    const file = path.join(dir, "torn.json");
+    fs.writeFileSync(file, '{"n": 1'); // a crashed process left this
+    fs.writeFileSync(path.join(dir, "torn.json.tmp"), "x"); // the tmp slot is free game
+    writeJsonAtomic(file, { n: 2 }, 1); // the next save replaces both wholesale
+    expect(JSON.parse(fs.readFileSync(file, "utf-8"))).toEqual({ n: 2 });
+    expect(fs.existsSync(`${file}.tmp`)).toBe(false);
   });
 });
