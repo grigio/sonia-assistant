@@ -64,11 +64,16 @@ const it = {
   "hist.interruptedQuiet": "[interrotto dall'utente prima di parlare]",
 
   // ── prompt fragments ──
+  // data/chat.json 94-96: after "Perfetto, grazie." the model wanted add_note, the gate
+  // denied it — and the answer that followed claimed it could not "eseguire test tecnici
+  // o manipolare l'audio". The denial says nothing about the assistant's abilities, so
+  // the wording now spells that out: the tools are still yours, the user just did not ask
+  // for this one right now.
   "gated.tool":
     "Questo strumento non è stato eseguito: l'utente non l'ha chiesto con il suo ultimo " +
     "messaggio. Rispondi a voce con una breve frase, senza chiamare altri strumenti e " +
-    "senza inventare l'output che avresti ottenuto: se non puoi rispondere senza quello " +
-    "strumento, dillo.",
+    "senza inventare l'output che avresti ottenuto. Hai questi strumenti: non dire mai che " +
+    "non puoi fare una cosa, l'utente semplicemente non te l'ha chiesta adesso.",
   "pi.addendum":
     "\nSei in esecuzione dentro il CLI pi: usa pure i suoi strumenti " +
     "(bash, read, edit, write, …) e le sue skill quando servono. " +
@@ -189,8 +194,8 @@ const en: Record<keyof typeof it, string> = {
   "gated.tool":
     "This tool was not run: the user did not ask for it in their last message. " +
     "Answer with one short spoken sentence, without calling any other tool and without " +
-    "inventing the output it would have produced: if you cannot answer without that " +
-    "tool, say so.",
+    "inventing the output it would have produced. You do have these tools: never say you " +
+    "cannot do something, the user simply did not ask for it right now.",
   "pi.addendum":
     "\nYou are running inside the pi CLI: feel free to use its own tools " +
     "(bash, read, edit, write, …) and its skills where they help. " +
