@@ -32,11 +32,19 @@ const gtk = dlopen("libgtk-4.so.1", {
   gtk_widget_get_parent: { args: ["ptr"], returns: "ptr" },
   gtk_window_set_icon_name: { args: ["ptr", "ptr"], returns: "void" },
   gtk_window_set_default_icon_name: { args: ["ptr"], returns: "void" },
+  // GTK 4.10+: the same named colours the stylesheet writes as @accent_color &
+  // friends are readable back out of a widget's style context.
+  gtk_style_context_lookup_color: { args: ["ptr", "ptr", "ptr"], returns: "i32" },
 }) as unknown as {
   symbols: {
     gtk_widget_get_parent: (w: unknown) => unknown;
     gtk_window_set_icon_name: (w: unknown, name: unknown) => void;
     gtk_window_set_default_icon_name: (name: unknown) => void;
+    gtk_style_context_lookup_color: (
+      ctx: unknown,
+      name: unknown,
+      rgba: unknown,
+    ) => number;
   };
 };
 
@@ -144,6 +152,45 @@ export function setWindowIcon(w: Widget, iconName: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * One of libadwaita's named colours (`accent_color`, `success_color`,
+ * `window_fg_color`, …) as straight RGBA in 0..1, or null when this GTK has no
+ * such colour — the caller then keeps whatever it drew before.
+ *
+ * The two cairo circles (the header orb, the footer's mic dot) are painted on a
+ * `CairoContext`, where no CSS rule reaches, and hard-coding their hexes there
+ * would pin the app to one palette: no light mode, no user accent. A
+ * `GtkWidget` has to be passed in only to reach its style context — the colour
+ * is a theme-wide constant, so any visible widget answers the same.
+ *
+ * jsGTK binds no `GtkStyleContext.getColor()`, hence the two extra FFI lines.
+ * The output is a `GdkRGBA`, i.e. **four floats** — reading it as doubles (the
+ * obvious `Float64Array`) returns plausible-looking nonsense.
+ */
+export function themeRgba(w: Widget, name: string): [number, number, number, number] | null {
+  try {
+    const ctx = (w as unknown as { getStyleContext(): { ptr: unknown } }).getStyleContext();
+    const rgba = new Float32Array(4);
+    const found = gtk.symbols.gtk_style_context_lookup_color(
+      ctx.ptr,
+      Buffer.from(name + "\0", "utf8"),
+      rgba,
+    );
+    if (!found) return null;
+    const [r, g, b, a] = rgba;
+    // a lookup on a widget whose style context has not been realised yet can
+    // answer with uninitialised floats; clamp rather than paint garbage
+    if (![r, g, b, a].every((v) => Number.isFinite(v))) return null;
+    return [clamp01(r), clamp01(g), clamp01(b), clamp01(a)];
+  } catch {
+    return null;
+  }
+}
+
+function clamp01(v: number): number {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
 /** Icon for every window that has none of its own (main + preferences). */

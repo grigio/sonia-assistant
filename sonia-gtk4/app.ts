@@ -68,7 +68,7 @@ import type {
   TaskInfo,
 } from "./protocol";
 import { STALE_ON_RESET } from "./protocol";
-import { onGtkIdle, onGtkIdleOnce, parentOf, setDefaultIconName, setWindowIcon, vadjustmentOf } from "./gtk-raw";
+import { onGtkIdle, onGtkIdleOnce, parentOf, setDefaultIconName, setWindowIcon, themeRgba, vadjustmentOf } from "./gtk-raw";
 import { makeI18n, type I18n } from "./i18n";
 import { Mic, Speaker, type MicFrame } from "./audio";
 
@@ -142,132 +142,212 @@ const ORB_D = 14;
 const MIC_D = 13;
 const DOT_BOX = 30;
 
-/** The footer's own accent — deliberately nothing like the header's state colours. */
-const MIC_COLOR: [number, number, number] = [0.612, 0.545, 1.0]; // violet
-
-const ORB_COLORS: Record<string, [number, number, number]> = {
-  listening: [0.486, 0.949, 0.612],
-  user: [0.486, 0.949, 0.612],
-  thinking: [0.706, 0.549, 1.0],
-  speaking: [1.0, 0.549, 0.353],
-  confirm: [1.0, 0.812, 0.361],
-  paused: [1.0, 0.812, 0.361],
-  offline: [0.33, 0.33, 0.33],
-  connecting: [0.33, 0.33, 0.33],
+/**
+ * The two level circles are painted in cairo, where no CSS reaches — so their
+ * colours come from the same libadwaita named colours the stylesheet uses, read
+ * back out of a widget's style context (see `themeRgba` in gtk-raw.ts).
+ *
+ * Each state gets the semantic colour the HIG would pick for it: green = the
+ * mic hears you, accent = Sonia works, warning = something needs a decision,
+ * dim = nothing is happening. `null` means "mix the two listed colours", which
+ * keeps a few states apart without inventing a private palette.
+ */
+const ORB_COLOR: Record<string, [string, string?]> = {
+  listening: ["success_color"],
+  user: ["success_color"],
+  thinking: ["accent_color"],
+  // half warning, half error → orange: Sonia's voice, neither calm nor alarmed
+  speaking: ["warning_color", "error_color"],
+  confirm: ["warning_color"],
+  paused: ["warning_color"],
+  offline: ["insensitive_fg_color"],
+  connecting: ["insensitive_fg_color"],
 };
 
+/** The footer's own accent — the user's accent colour, not a fixed violet. */
+const MIC_COLOR = "accent_color";
+
+/** Last resort if a theme lookup fails: a neutral grey that reads in both modes. */
+const OFFLINE_RGB: [number, number, number] = [0.55, 0.55, 0.55];
+
+/**
+ * Sonia's stylesheet.
+ *
+ * Rules of the house, all of them libadwaita/HIG rather than a private look:
+ *   • **no hard-coded colours.** Everything is a theme named colour
+ *     (`@accent_color`, `@success_color`, `@window_bg_color`, …), so the app
+ *     follows the light/dark preference and the user's accent without a line of
+ *     TypeScript. Tints that have no named colour of their own are
+ *     `@alpha(<colour>, <fraction>)` over the window background.
+ *   • **type in `em`, never `px`.** One base size on `window` and every label,
+ *     badge and code block is relative to it, so GNOME's text-scaling setting
+ *     and our own smaller base both keep working.
+ *   • **a 4pt spacing grid**, 6/9/12px radii, 28px controls — the HIG's own
+ *     numbers for buttons, entries and cards.
+ *   • **one visible focus ring** (`:focus-visible` → accent outline), which the
+ *     flat buttons below would otherwise lose.
+ */
 const CSS = `
-  window { background: #0f1115; color: #e6e8ee; }
-  .dim { color: #8a90a0; }
-  /* like the web UI: same padding/radius, plus the little "tail" corner */
-  .bubble-user { background: #2b5cff; color: #ffffff; border-radius: 14px;
-                 border-bottom-right-radius: 4px; padding: 9px 13px; }
-  .bubble-bot { background: #222733; color: #e6e8ee; border-radius: 14px;
-                border-bottom-left-radius: 4px; padding: 9px 13px; }
-  .info-line { color: #8a90a0; font-size: 11px; }
-  .info-user { color: #c9d4ff; font-size: 11px; }
-  .event-line { color: #8a90a0; font-size: 12px; }
-  .partial-line { color: #9db8ff; font-style: italic; }
-  .card { background: #1b1f29; border: 1px solid #343b4d; border-radius: 12px;
-          padding: 9px 12px; }
-  .card-pending { border-color: #ffcf5c; }
-  .tool-card { background: #141821; border: 1px solid #2a3140; border-radius: 12px;
-               padding: 7px 11px; }
-  .tool-err { border-color: #7a2f2f; }
-  .tool-blocked { border-color: #7a5f2f; }
-  .code { font-family: monospace; color: #ffd98a; font-size: 13px; }
-  .pre { font-family: monospace; font-size: 12px; background: #0b0d11;
-         padding: 7px 9px; border-radius: 8px; color: #e6e8ee; }
-  .think-body { font-family: monospace; font-size: 12px; background: #0b0d11;
-                border-left: 2px solid #7c5cff; border-radius: 6px;
-                padding: 7px 9px; color: #aab2c8; }
-  .tool-name { color: #9fd3ff; font-weight: bold; }
-  .badge-run { color: #8a90a0; font-size: 12px; }
-  .badge-ok { color: #7cf29c; font-size: 12px; }
-  .badge-err { color: #ff8f8f; font-size: 12px; }
-  .badge-blocked { color: #ffc88f; font-size: 12px; }
-  .rew { padding: 2px 8px; border-radius: 999px; opacity: 0.55; }
-  .task-chip { background: #1b2130; border: 1px solid #3a4152;
-               border-radius: 999px; padding: 3px 4px 3px 12px; }
-  .chip-left { color: #ffcf5c; font-weight: bold; font-size: 12px; }
-  .btn-flat { background: transparent; border: none; padding: 0; }
-  .btn-flat:hover { background: rgba(255,255,255,0.07); }
-  .state-label { color: #8a90a0; font-size: 13px; }
-  .title-label { font-weight: bold; }
-  .badge-pi { color: #7cf29c; font-size: 11px; border: 1px solid #7cf29c;
-              border-radius: 999px; padding: 0 8px; }
-  .ctx-text { font-size: 11px; font-weight: bold; }
+  /* ── base ────────────────────────────────────────────────────────────── */
+  window {
+    background: @window_bg_color;
+    color: @theme_fg_color;
+    /* the one knob that sets the app's text size: 0.85em of the desktop font,
+       i.e. ~13px at 100% scaling — a touch above the 12px floor the HIG sets
+       for secondary text, and every other size follows from this one */
+    font-size: 0.85em;
+  }
+  .dim { color: @theme_fg_dim_color; }
+
+  /* ── chat bubbles ────────────────────────────────────────────────────── */
+  .bubble-user { background: @accent_bg_color; color: @accent_fg_color;
+                 border-radius: 12px; padding: 6px 9px; }
+  .bubble-bot  { background: alpha(@theme_fg_color, 0.06); color: @theme_fg_color;
+                 border-radius: 12px; padding: 6px 9px; }
+
+  /* secondary text: the HIG's ~85% step down from the base size */
+  .info-line     { color: @theme_fg_dim_color; font-size: 0.88em; }
+  .info-user     { color: alpha(@accent_fg_color, 0.8); font-size: 0.88em; }
+  .event-line    { color: @theme_fg_dim_color; font-size: 0.92em; }
+  .partial-line  { color: @accent_color; font-style: italic; }
+
+  /* ── command & tool cards ────────────────────────────────────────────── */
+  .card { background: alpha(@theme_fg_color, 0.03);
+          border: 1px solid alpha(@theme_fg_color, 0.12);
+          border-radius: 12px; padding: 6px 9px; }
+  .card-pending { border-color: @warning_color; }
+  .tool-card { background: alpha(@theme_fg_color, 0.02);
+               border: 1px solid alpha(@theme_fg_color, 0.09);
+               border-radius: 12px; padding: 5px 8px; }
+  .tool-err    { border-color: @error_color; }
+  .tool-blocked{ border-color: @warning_color; }
+  .code { font-family: monospace; color: @warning_color; font-size: 0.95em; }
+  .pre { font-family: monospace; font-size: 0.9em;
+         background: alpha(black, 0.28);
+         border: 1px solid alpha(@theme_fg_color, 0.08);
+         padding: 5px 7px; border-radius: 6px; color: @theme_fg_color; }
+  .think-body { font-family: monospace; font-size: 0.9em;
+                background: alpha(black, 0.28);
+                border-left: 2px solid @accent_color; border-radius: 6px;
+                padding: 5px 7px; color: @theme_fg_dim_color; }
+  .tool-name { color: @accent_color; font-weight: bold; }
+
+  /* status badges: the HIG's semantic palette, never a private green/red */
+  .badge-run     { color: @theme_fg_dim_color; font-size: 0.88em; }
+  .badge-ok      { color: @success_color; font-size: 0.88em; }
+  .badge-err     { color: @error_color; font-size: 0.88em; }
+  .badge-blocked { color: @warning_color; font-size: 0.88em; }
+
+  /* ── header ──────────────────────────────────────────────────────────── */
+  .title-label { font-weight: bold; font-size: 1.05em; }
+  .state-label { color: @theme_fg_dim_color; font-size: 0.92em; }
+  .badge-pi { color: @success_color; font-size: 0.82em;
+              border: 1px solid alpha(@success_color, 0.6);
+              border-radius: 999px; padding: 0 6px; }
   /* web #ctxBox: pill with the bar and the numbers side by side, centred */
-  .ctx-box { background: #1d212a; border: 1px solid #343b4d; border-radius: 999px;
-             padding: 3px 10px 3px 9px; }
+  .ctx-box { background: alpha(@theme_fg_color, 0.04);
+             border: 1px solid alpha(@theme_fg_color, 0.12);
+             border-radius: 999px; padding: 2px 8px 2px 7px; }
+  .ctx-text { font-size: 0.85em; font-weight: bold; }
   /* Adwaita gives a horizontal progressbar a ~180px minimum, which made the ctx
      pill swallow the header and squeeze the title. Pin it (the trough selector is
      the one that actually carries the width). */
-  progressbar.horizontal, progressbar.vertical { min-width: 48px; min-height: 8px; }
+  progressbar.horizontal, progressbar.vertical { min-width: 40px; min-height: 6px; }
   progressbar.horizontal trough, progressbar.vertical trough {
-    min-width: 48px; min-height: 8px; background: #0c0e12; border-radius: 999px;
-    box-shadow: inset 0 0 0 1px #39404f; }
-  progressbar progress { background: #7cf29c; min-height: 8px; border-radius: 999px; }
-  progressbar progress.warn { background: #ffcf5c; }
-  progressbar progress.hot { background: #ff6b6b; }
-  .accent { color: #7cf29c; }
-  .off { color: #ffcf5c; }
-  /* compact input: the web's 9px vertical padding made a 34px-tall field and a
-     54px footer in a 31px button row — too much height for a one-line prompt */
-  entry { background: #171a21; border: 1px solid #262a33; border-radius: 10px;
-          padding: 5px 12px; color: #e6e8ee; min-height: 22px; }
-  entry:focus { border-color: #3b5bdb; }
-  list { background: transparent; }
-  .footbar { background: #171a21; border-top: 1px solid #262a33; padding: 8px 14px; }
-  .hdrbar { background: #171a21; }
+    min-width: 40px; min-height: 6px; background: alpha(black, 0.3);
+    border-radius: 999px; box-shadow: inset 0 0 0 1px alpha(@theme_fg_color, 0.15); }
+  progressbar progress { background: @success_color; min-height: 6px; border-radius: 999px; }
+  progressbar progress.warn { background: @warning_color; }
+  progressbar progress.hot  { background: @error_color; }
+
+  /* the model picker: a pill in the header, and in the popover a titled list */
+  .model-pop-title { color: @theme_fg_dim_color; font-size: 0.88em; }
+  .model-row { border-radius: 8px; padding: 2px 6px; }
+  .model-row:hover { background: alpha(@theme_fg_color, 0.06); }
+  .model-row-current { background: alpha(@accent_bg_color, 0.2); }
+  .model-name { font-family: monospace; font-size: 0.9em; }
+  .model-tick { color: @accent_color; font-weight: bold; font-size: 0.95em; }
+
+  /* ── task banner ─────────────────────────────────────────────────────── */
+  .task-chip { background: alpha(@theme_fg_color, 0.04);
+               border: 1px solid alpha(@theme_fg_color, 0.12);
+               border-radius: 999px; padding: 1px 2px 1px 9px; }
+  .chip-left { color: @warning_color; font-weight: bold; font-size: 0.9em; }
+
+  /* ── footer ──────────────────────────────────────────────────────────── */
+  .footbar { background: alpha(black, 0.16);
+             border-top: 1px solid alpha(@theme_fg_color, 0.1); padding: 6px 12px; }
+  .hdrbar  { background: alpha(black, 0.16); }
   /* web: the orb is pinned to the title's first line, not centred on the
      two-line block, so it cannot drift when the state label below grows */
   .orb-dot { margin-top: 3px; }
 
-  /* Icon buttons: Adwaita gives every button 46x34 + generous padding, which
-     makes the footer look like a row of slabs. Compact squares with a soft
-     radius, sized per bar, matching the web UI's icon buttons. */
-  button, togglebutton { border-radius: 10px; }
-  /* Rounded *squares*: in a Box the buttons stretch to the row height (they came
-     out as tall pills), so the code valigns them to CENTER — min-* then sets the
-     size. (GTK4 CSS has no max-width/max-height: the parser warns and drops it.) */
-  .footbar button, .footbar togglebutton {
-    min-width: 31px; min-height: 31px; padding: 0; margin: 0; border-radius: 10px; }
-  /* HeaderBar buttons are flat/transparent by default (Adwaita), which made the
-     top row look like bare glyphs next to the footer's rounded squares. Same box
-     as the footer, plus a hover — the web UI styles both rows identically. */
+  /* ── controls ────────────────────────────────────────────────────────── */
+  /* Adwaita's defaults are sized for touch (46x34); the HIG's desktop minimum is
+     28x28 with a 6px radius, which is what the icon rows here want. */
+  button, togglebutton { border-radius: 6px; }
+  .footbar button, .footbar togglebutton,
   .hdrbar button, .hdrbar togglebutton {
-    min-width: 31px; min-height: 31px; padding: 0; margin: 0; border-radius: 10px;
-    background: #232835; border: 1px solid #343b4d; color: #e6e8ee; }
-  .hdrbar button:hover, .hdrbar togglebutton:hover { background: #2b3242; }
-  /* the model picker: a pill in the header, and in the popover a titled list */
+    min-width: 28px; min-height: 28px; padding: 0; margin: 0; border-radius: 6px; }
+  .footbar button:hover, .footbar togglebutton:hover,
+  .hdrbar button:hover, .hdrbar togglebutton:hover {
+    background: alpha(@theme_fg_color, 0.08); }
+  .hdrbar button, .hdrbar togglebutton {
+    background: alpha(@theme_fg_color, 0.05);
+    border: 1px solid alpha(@theme_fg_color, 0.1);
+    color: @theme_fg_color; }
+  .hdrbar button:disabled, .hdrbar togglebutton:disabled { opacity: 0.4; }
+
+  /* the model picker is a pill: one border, not the double outline a
+     GtkMenuButton's linked button+arrow pair would draw */
   .hdrbar .model-btn {
-    background: #1e2330; border: 1px solid #2b3242; border-radius: 999px;
-    padding: 0; margin: 0 2px; min-width: 0; }
-  .hdrbar .model-btn:hover { background: #252c3c; }
-  .hdrbar .model-btn label { font-size: 12px; }
-  /* A GtkMenuButton with a label is a *linked pair* (name button + arrow button)
-     and each part draws its own border, which read as a double outline. Strip
-     theirs so the pill keeps exactly one. */
+    background: alpha(@theme_fg_color, 0.04); border: 1px solid alpha(@theme_fg_color, 0.1);
+    border-radius: 999px; padding: 0; margin: 0 2px; min-width: 0; }
+  .hdrbar .model-btn:hover { background: alpha(@theme_fg_color, 0.08); }
+  /* the model name is the one thing in the header a user reads on purpose, so
+     this pill is a step bigger than the icon buttons beside it: full body size
+     (not the shrunken one) and a 32px tall control, still inside the 47px bar */
+  .hdrbar .model-btn label { font-size: 1em; }
   .hdrbar .model-btn button {
     background: transparent; border: none; border-radius: 0;
-    min-width: 0; min-height: 28px; padding: 0 7px; }
+    min-width: 0; min-height: 32px; padding: 0 6px; }
   .hdrbar .model-btn button:first-child { padding-left: 12px; }
-  .hdrbar .model-btn button:last-child { padding-right: 9px; }
-  .model-pop-title { color: #8a90a0; font-size: 11px; }
-  .model-row { border-radius: 8px; }
-  .model-row:hover { background: rgba(255,255,255,0.05); }
-  .model-row-current { background: rgba(61,110,255,0.18); }
-  .model-name { font-family: monospace; font-size: 12px; }
-  .model-tick { color: #7c9bff; font-weight: bold; font-size: 13px; }
-  .task-chip .btn-flat { min-width: 26px; min-height: 26px; margin: 0 2px;
-                        border-radius: 999px; }
-  /* the web button is a 22px circle hanging in the bubble's top corner */
-  .rew { min-width: 22px; min-height: 22px; padding: 0; margin: 0;
+  .hdrbar .model-btn button:last-child  { padding-right: 8px; }
+
+  /* compact input: 8px of horizontal padding and a 6px radius, per the HIG */
+  entry { background: alpha(black, 0.2);
+          border: 1px solid alpha(@theme_fg_color, 0.14);
+          border-radius: 6px; padding: 4px 8px; color: @theme_fg_color;
+          min-height: 20px; caret-color: @accent_color; }
+  entry:focus { border-color: @accent_color; }
+
+  /* ── flat, circular buttons ──────────────────────────────────────────── */
+  .btn-flat { background: transparent; border: none; padding: 0; }
+  .btn-flat:hover { background: alpha(@theme_fg_color, 0.08); }
+  .btn-flat:disabled { opacity: 0.35; }
+  .task-chip .btn-flat { min-width: 22px; min-height: 22px; margin: 0 2px;
+                         border-radius: 999px; }
+  .rew { min-width: 20px; min-height: 20px; padding: 0; margin: 0;
          border-radius: 999px; background: transparent; border: none;
-         opacity: 0.35; font-size: 13px; }
-  .rew:hover { opacity: 1; background: rgba(255,255,255,0.07); }
+         opacity: 0.4; font-size: 0.95em; }
+  .rew:hover { opacity: 1; background: alpha(@theme_fg_color, 0.08); }
   .rew:disabled { opacity: 0.15; }
+
+  /* ── lists ───────────────────────────────────────────────────────────── */
+  list, listview, row { background: transparent; }
+
+  /* ── focus ───────────────────────────────────────────────────────────── */
+  /* HIG: keyboard focus must be obvious. The flat buttons above drop the
+     theme's own ring, so every interactive widget gets the accent one. */
+  button:focus, entry:focus, togglebutton:focus,
+  listbox:focus, .rew:focus, .btn-flat:focus,
+  .model-btn:focus {
+    outline: 2px solid @accent_color; outline-offset: -2px; }
+  .rew:focus, .btn-flat:focus { outline-offset: 1px; }
+
+  /* ── accents kept as classes for the TypeScript side ─────────────────── */
+  .accent { color: @accent_color; }
+  .off { color: @warning_color; }
 `;
 
 export class SoniaApp {
@@ -357,6 +437,9 @@ export class SoniaApp {
   private micPeak = 0;
   private dotLvl = 0;
   private orbLvl = 0;
+  /** memoised libadwaita named colours for the two cairo circles */
+  private readonly themeCache = new Map<string, [number, number, number]>();
+  private themeAge = 0; // ticks since the cache was last dropped (~1s)
   private state: StateName | "connecting" = "connecting";
 
   constructor(private readonly opts: AppOptions) {
@@ -390,7 +473,9 @@ export class SoniaApp {
   // ───────────────────────────── UI construction ─────────────────────────────
 
   private buildUI(): void {
-    StyleManager.getDefault().setColorScheme(ColorScheme.FORCE_DARK);
+    // no forced dark: every colour below comes from the theme, so following the
+    // user's light/dark preference (and their accent) is both correct and free
+    StyleManager.getDefault().setColorScheme(ColorScheme.DEFAULT);
     const display = Display.getDefault();
     if (display) {
       const css = new CssProvider();
@@ -528,15 +613,18 @@ export class SoniaApp {
     this.ctxBox.setVisible(false);
     this.ctxBox.setTooltipText(this.t("ctx.title.short"));
     row1.append(this.ctxBox);
+    titleBox.append(row1);
+
+    // The state is the title's *subtitle*: HIG style, one column of text under
+    // another, and it keeps the state colour next to the name it describes.
+    // Indented by the orb's box + the row gap so it lines up with the title's
+    // text, not with the orb's left edge.
     this.stateLabel = new Label("");
     this.stateLabel.addCssClass("state-label");
     this.stateLabel.setHalign(Align.START);
-    // the state rides at the end of the title's row (after the ctx pill) instead
-    // of hugging the left edge on a line of its own: it reads as a status, and
-    // the title keeps its space because it has no hexpand
-    this.stateLabel.setMarginStart(4);
-    row1.append(this.stateLabel);
-    titleBox.append(row1);
+    this.stateLabel.setEllipsize(3); // PANGO_ELLIPSIZE_END
+    this.stateLabel.setMarginStart(DOT_BOX + 8);
+    titleBox.append(this.stateLabel);
     // `setTitleWidget` cannot pin this to the left: a GtkHeaderBar lays the
     // title widget out in a *centre box*, so a wide window parks the whole block
     // in the middle (halign/hexpand on the widget change nothing). Packing it
@@ -904,11 +992,13 @@ export class SoniaApp {
   /** Header circle: Sonia's voice, coloured by the current state. */
   private drawOrb(cr: CairoContext, w: number, h: number): void {
     const live = this.state === "speaking" || this.state === "listening";
+    const spec = ORB_COLOR[this.state] ?? ORB_COLOR.connecting!;
+    const rgb = this.themeColor(spec[0], spec[1]) ?? OFFLINE_RGB;
     this.drawLevelDot(
       cr,
       w,
       h,
-      ORB_COLORS[this.state] ?? ORB_COLORS.offline!,
+      rgb,
       this.orbLvl,
       live && this.voiceOn,
       0.55,
@@ -916,18 +1006,42 @@ export class SoniaApp {
     );
   }
 
-  /** Footer circle: your microphone, always the mic colour, always the input level. */
+  /** Footer circle: your microphone, always the accent colour, always the input level. */
   private drawDot(cr: CairoContext, w: number, h: number): void {
     this.drawLevelDot(
       cr,
       w,
       h,
-      MIC_COLOR,
+      this.themeColor(MIC_COLOR) ?? OFFLINE_RGB,
       this.dotLvl,
       this.micOn && !this.takenOver,
       0.9,
       MIC_D / 2,
     );
+  }
+
+  /**
+   * A theme named colour as RGB for cairo, memoised per name and re-read once
+   * a second (see `tickLevels`): the circles are redrawn 30×/s and a style-context
+   * lookup is far too expensive for that, while the accent colour only changes
+   * when the user (or the OS) switches theme or light/dark. Passing a second
+   * name mixes the two colours, which is how "speaking" keeps its own hue
+   * without the app carrying a palette of its own.
+   */
+  private themeColor(name: string, mixWith?: string): [number, number, number] | null {
+    const hit = this.themeCache.get(name);
+    if (hit) return hit;
+    const ref = this.orb ?? this.micDot;
+    if (!ref) return null;
+    const c = themeRgba(ref, name);
+    if (!c) return null;
+    let rgb: [number, number, number] = [c[0], c[1], c[2]];
+    if (mixWith) {
+      const m = themeRgba(ref, mixWith);
+      if (m) rgb = [rgb[0] * 0.5 + m[0] * 0.5, rgb[1] * 0.5 + m[1] * 0.5, rgb[2] * 0.5 + m[2] * 0.5];
+    }
+    this.themeCache.set(name, rgb);
+    return rgb;
   }
 
   /** Fast attack / slow release, same shape as the web UI's rAF loop. */
@@ -941,6 +1055,12 @@ export class SoniaApp {
     const bot = this.voiceOn ? this.speaker.lastRms : 0;
     this.speaker.lastRms *= 0.6;
     this.orbLvl = bot > this.orbLvl ? bot : this.orbLvl * 0.82;
+    // the cached theme colours age out on their own: a light/dark flip or an
+    // accent change must not leave the circles painted in the old palette
+    if (++this.themeAge >= 30) {
+      this.themeAge = 0;
+      this.themeCache.clear();
+    }
     // both dots are level-driven (mic down, voice up) and the header one also
     // follows the state colour, so redraw them on every tick
     this.micDot.queueDraw();
