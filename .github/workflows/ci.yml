@@ -83,7 +83,71 @@ jobs:
     container:
       image: archlinux:base-devel
     steps:
+      # full history + tags: the release notes are generated from the commits between
+      # this tag and the previous one
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      # Release notes = every commit in this tag's range, grouped by conventional-commit
+      # type, with the breaking changes called out first. Falls back to a flat list.
+      - name: Build the release notes from the commit messages
+        id: notes
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          prev="$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)"
+          if [ -n "$prev" ]; then
+            range="${prev}..${tag}"
+            echo "Release notes: commits in ${range}"
+          else
+            range="${tag}"
+            echo "No previous tag found; using the commits reachable from ${tag}"
+          fi
+
+          # type: subject, split on the first colon only (scoped types like feat(ui): count)
+          commits() { git log --no-merges --pretty=format:'%s' "$range"; }
+          section() { commits | grep -E "^$1(\([^)]*\))?!?:" || true; }
+
+          breaking="$(commits | grep -E '^[a-z]+(\([^)]*\))?!:' || true)"
+          feats="$(section 'feat' | grep -vE '^[a-z]+(\([^)]*\))?!:' || true)"
+          fixes="$(section 'fix' | grep -vE '^[a-z]+(\([^)]*\))?!:' || true)"
+          perf="$(section 'perf' | grep -vE '^[a-z]+(\([^)]*\))?!:' || true)"
+          docs="$(section 'docs' | grep -vE '^[a-z]+(\([^)]*\))?!:' || true)"
+          chores="$(section 'chore' | grep -vE '^[a-z]+(\([^)]*\))?!:' || true)"
+
+          {
+            echo "## What's changed in \`${tag}\`"
+            echo
+            if [ -n "$prev" ]; then
+              echo "_All commits since [\`${prev}\`](../../compare/${prev}...${tag})._"
+            else
+              echo "_Initial release._"
+            fi
+            echo
+            emit() { # <heading> <body>
+              if [ -n "$2" ]; then
+                echo "### $1"
+                echo
+                echo "$2" | sed 's/^/- /'
+                echo
+              fi
+            }
+            emit "⚠️ Breaking changes" "$breaking"
+            emit "✨ Features" "$feats"
+            emit "🐛 Fixes" "$fixes"
+            emit "⚡ Performance" "$perf"
+            emit "📚 Docs" "$docs"
+            emit "🧹 Chores" "$chores"
+
+            other="$(commits | grep -vE '^(feat|fix|perf|docs|chore|refactor|test|style|build|ci)(\([^)]*\))?!?: ' || true)"
+            emit "📦 Other changes" "$other"
+          } > release-notes.md
+
+          echo "--- release notes ---"
+          cat release-notes.md
+          echo "---------------------"
 
       - name: Install makepkg's build dependencies
         run: pacman -Syu --noconfirm --needed git make patch unzip
@@ -114,3 +178,7 @@ jobs:
         with:
           files: sonia-gtk4/packaging/sonia-gtk4-*.pkg.tar.zst
           fail_on_unmatched_files: true
+          # the notes generated from the commits; empty releases keep the action's own
+          # auto-generated "Full Changelog" fallback
+          body_path: release-notes.md
+          append_body: true
