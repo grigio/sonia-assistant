@@ -88,10 +88,9 @@ jobs:
       - name: Install makepkg's build dependencies
         run: pacman -Syu --noconfirm --needed git make patch unzip
 
+      # bun lands in /usr/local so the non-root `builder` user running makepkg can see it too
       - name: Install bun (the runtime, and what the client sources run under)
-        run: |
-          curl -fsSL https://bun.sh/install | bash
-          echo "$BUN_INSTALL/bin" >> "$GITHUB_PATH"
+        run: BUN_INSTALL=/usr/local curl -fsSL https://bun.sh/install | bash
 
       # makepkg refuses to run as root, and container jobs run as root: build as `builder`.
       # The checkout is owned by root, so hand it over too (git needs safe.directory as well).
@@ -101,7 +100,8 @@ jobs:
           useradd -m builder
           chown -R builder "$GITHUB_WORKSPACE"
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          runuser -l builder -c "makepkg -sf --noconfirm"
+          runuser -u builder -- bash -c \
+            "cd '$GITHUB_WORKSPACE/sonia-gtk4/packaging' && makepkg -sf --noconfirm"
 
       - name: Package contents
         run: tar -tvf sonia-gtk4-*.pkg.tar.zst
