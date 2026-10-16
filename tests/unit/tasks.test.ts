@@ -104,7 +104,10 @@ describe("the timer chip", () => {
     const { tools, seen, rings, lastTasks, done } = fixture();
     await tools.call("set_timer", JSON.stringify({ seconds: 1, label: "caffè" }));
     expect(tools.tasks()).toHaveLength(1);
-    await sleep(1300);
+    // Poll for the ring rather than sleeping past it: a fixed `sleep(1300)` over a 1 s
+    // timer leaves only 300 ms of slack, so a loaded CI box reports "did not ring yet"
+    // as a failure. `until` waits as long as it takes and fails only when it cannot.
+    await until(() => rings.length >= 1, "the timer to ring");
     expect(tools.tasks()).toEqual([]);
     expect(lastTasks()).toEqual([]);          // the ring took the chip with it
     expect(rings).toEqual(["Il caffè è scaduto."]);
@@ -128,7 +131,7 @@ describe("the timer chip", () => {
     const { tools, rings, done } = fixture();
     await tools.call("set_timer", JSON.stringify({ seconds: 1, label: "caffè" }));
     assistantOver(tools).resetConversation();
-    await sleep(1300);
+    await until(() => rings.length >= 1, "the ring after a cleared chat");
     expect(rings).toEqual(["Il caffè è scaduto."]);
     done();
   });
@@ -241,7 +244,7 @@ describe("the watch chip — a check repeated at an interval, forever", () => {
     });
     expect(tools.tasks()).toEqual([]);
     const saidAfter = rings.length;
-    await sleep(300);
+    await sleep(600);
     expect(rings.length).toBe(saidAfter);   // the loop really ended, no more checks
     done();
   });
@@ -260,14 +263,17 @@ describe("the watch chip — a check repeated at an interval, forever", () => {
       undefined,
       "tell me when the download is done",
     );
-    await sleep(300);
+    // Negative assertions need *more* slack than positive ones, not less: these watch
+    // "nothing happened" across a 200 ms poll period, so the window is three periods
+    // (600 ms) — a loaded box that stretches a tick cannot flip the result.
+    await sleep(600);
     expect(rings).toEqual([]);            // still pending: nothing worth saying
 
     fs.writeFileSync(flag, "done ✓\n");
     await until(() => rings.length >= 1, "the condition to be announced");
     expect(rings[0]).toBe("Heads-up, download: done ✓");
 
-    await sleep(300);                     // it keeps matching: it does NOT say it again
+    await sleep(600);                     // it keeps matching: it does NOT say it again
     expect(rings).toHaveLength(1);
     tools.cancelTask("watch-1");
     done();

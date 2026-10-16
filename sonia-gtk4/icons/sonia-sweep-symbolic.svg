@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Sonia GTK4 — "clear the chat": a broom, sweeping.
+     GTK recolours any *-symbolic* icon by alpha, so the colour below only
+     matters for editors/preview; the stroke is already the UI text colour, because
+     these are loaded as *files* (no theme recolouring). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" viewBox="0 0 24 24"
+     fill="none" stroke="#e6e8ee" stroke-width="1.7"
+     stroke-linecap="round" stroke-linejoin="round">
+  <!-- handle -->
+  <line x1="13.5" y1="3.5" x2="20" y2="10"/>
+  <!-- head -->
+  <path d="M11.8 7.2 L16.8 12.2 L10.5 18.5 L5.5 13.5 Z"/>
+  <!-- bristles -->
+  <line x1="7.6" y1="11.4" x2="12.6" y2="16.4"/>
+  <line x1="9.4" y1="9.6" x2="14.4" y2="14.6"/>
+</svg>

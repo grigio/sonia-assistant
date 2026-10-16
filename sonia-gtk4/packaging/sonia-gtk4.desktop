@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Sonia (GTK)
+GenericName=Assistente vocale
+Comment=Client nativo GTK4 dell'assistente Sonia (stesso /ws della UI web)
+Exec=sonia-gtk4
+Icon=sonia-gtk4
+Terminal=false
+Categories=AudioVideo;Audio;
+Keywords=voice;assistant;sonia;speech;llm;
+StartupNotify=true
+StartupWMClass=it.sonia.Assistant

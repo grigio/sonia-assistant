@@ -69,3 +69,39 @@ jobs:
 
       - name: Full suite
         run: bun run test:all
+
+  # The native GTK4 client's Arch package, built from this checkout only (the PKGBUILD
+  # reads sonia-gtk4/ and never downloads sources). Runs in an Arch container so `makepkg`
+  # is the real thing, and attaches the .pkg.tar.zst to the tag's GitHub release (creating
+  # the release if it doesn't exist yet).
+  pkg-arch:
+    name: Arch package (sonia-gtk4)
+    if: ${{ startsWith(github.ref, 'refs/tags/') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    container:
+      image: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install makepkg's build dependencies
+        run: pacman -Syu --noconfirm --needed git make patch
+
+      - name: Install bun (the runtime, and what the client sources run under)
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          echo "$BUN_INSTALL/bin" >> "$GITHUB_PATH"
+
+      - name: Build the package
+        working-directory: sonia-gtk4/packaging
+        run: makepkg -sf --noconfirm
+
+      - name: Package contents
+        run: tar -tvf sonia-gtk4-*.pkg.tar.zst
+
+      - name: Attach the package to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: sonia-gtk4/packaging/sonia-gtk4-*.pkg.tar.zst
+          fail_on_unmatched_files: true

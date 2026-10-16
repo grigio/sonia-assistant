@@ -1,0 +1,17 @@
+{
+  "lockfileVersion": 2,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "sonia-gtk4",
+      "dependencies": {
+        "@sigmasd/gtk": "npm:@jsr/sigmasd__gtk@^0.67.0",
+      },
+    },
+  },
+  "packages": {
+    "@jsr/sigma__deno-compat": ["@jsr/sigma__deno-compat@0.23.0", "https://npm.jsr.io/~/11/@jsr/sigma__deno-compat/0.23.0.tgz", {}, "sha512-xBjRuR/lzG81UeaoiD0dWTJTdKHBI57RTwNtCSvwhQGJ95FP/dpbJrn0A4jHJd7xKF6CQD3aETf2Z4Vqls2Dng=="],
+
+    "@sigmasd/gtk": ["@jsr/sigmasd__gtk@0.67.0", "https://npm.jsr.io/~/11/@jsr/sigmasd__gtk/0.67.0.tgz", { "dependencies": { "@jsr/sigma__deno-compat": "0.23.0" } }, "sha512-3J9aNUV1BcDPRAhsLDfNzqjl453f/t2WKy7beEMnH9ZruU2w1QawlGYTRgyPCo7FUQhf5rRiTNgV6LzO8R2Xvg=="],
+  }
+}

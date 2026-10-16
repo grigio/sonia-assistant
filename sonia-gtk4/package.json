@@ -1,0 +1,10 @@
+{
+  "name": "sonia-gtk4",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Sonia native GTK4 client (Bun + jsGTK) for the sonia-assistant harness",
+  "dependencies": {
+    "@sigmasd/gtk": "npm:@jsr/sigmasd__gtk@^0.67.0"
+  }
+}

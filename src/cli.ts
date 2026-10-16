@@ -54,7 +54,7 @@ export function parseCli(argv: string[]): CliArgs {
 }
 
 /** `--port` must be a usable TCP port: `Number()` alone happily yields NaN/0/-1. */
-function parsePort(raw: string | undefined): number {
+export function parsePort(raw: string | undefined): number {
   const port = Number(raw);
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error(`--port: not a TCP port number: ${raw}`);
@@ -62,13 +62,28 @@ function parsePort(raw: string | undefined): number {
   return port;
 }
 
-function parseInputWav(items: string[]): [number, string][] {
+/**
+ * `--input-wav [<seconds>:]<file>` → the (delay, path) pairs `WavMic` replays.
+ *
+ * The split is on the **first** colon, because the grammar is `<seconds>:<file>` and the
+ * seconds can never contain one — and only when what precedes it is a number.
+ *
+ * Both halves of that rule are load-bearing. `lastIndexOf(":")` used to be used here,
+ * which broke any path with a colon in it: `--input-wav 2:my:recording.wav` parsed the
+ * delay as `Number("2:my")` = `NaN`, and `WavMic` turns a `NaN` delay into a zero-length
+ * silence (`Math.trunc(NaN)` → `new Uint8Array(NaN)`), so the two clips ran back to back
+ * with the gap silently gone. Requiring a numeric prefix is what keeps a bare Windows path
+ * intact — `C:\clips\a.wav` is one filename, not a delay of `NaN` — while
+ * `3:C:\clips\a.wav` still reads as "3 s, then that file".
+ */
+export function parseInputWav(items: string[]): [number, string][] {
   return items.map((item) => {
-    if (item.includes(":")) {
-      const idx = item.lastIndexOf(":");
-      const delay = item.slice(0, idx);
-      const path = item.slice(idx + 1);
-      return [Number(delay || 1.0), path] as [number, string];
+    const idx = item.indexOf(":");
+    if (idx >= 0) {
+      const head = item.slice(0, idx);
+      if (head === "" || Number.isFinite(Number(head))) {
+        return [Number(head || 1.0), item.slice(idx + 1)] as [number, string];
+      }
     }
     return [1.0, item] as [number, string];
   });

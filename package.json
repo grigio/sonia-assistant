@@ -1,6 +1,6 @@
 {
   "name": "fullduplex-assistant",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "GPL-3.0-only",
   "type": "module",
   "private": true,
@@ -9,11 +9,15 @@
   },
   "scripts": {
     "start": "bun run scripts/run.ts",
+    "webui": "bun run scripts/run.ts --browser",
     "stop": "bun run scripts/stop.ts --audio",
     "runtime-check": "bun run scripts/runtime-check.ts",
     "status": "bun run scripts/status.ts",
     "models-download": "bun run scripts/models-download.ts",
     "fetch-and-compile-audio.cpp": "bun run scripts/fetch-and-compile-audio-cpp.ts",
+    "gtk4": "bun run sonia-gtk4/main.ts",
+    "gtk4:install": "bash sonia-gtk4/install.sh",
+    "gtk4:uninstall": "bash sonia-gtk4/install.sh --uninstall",
     "typecheck": "tsc --noEmit",
     "pretest": "bun run typecheck",
     "test": "bun test tests/unit",

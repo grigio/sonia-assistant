@@ -3,8 +3,14 @@
  * (Formerly the root-level ./run.sh; same steps, same arguments, same exit codes.)
  * The LLM is the already-running llama-server on :8080 (Qwen3.5-4B-MTP-Q4_K_M).
  *
- *   bun run start                 browser UI: opens Chromium (mic + speaker + AEC) once ready
- *   bun run start --no-browser    same, but just print the URL (http://127.0.0.1:8095)
+ *   bun run start                 web UI served on http://127.0.0.1:8095, no Chromium
+ *   bun run webui                 same, but opens the embedded Chromium UI (mic + speaker + AEC)
+ *                                 — if a harness is already listening (a `bun run start` in
+ *                                 another terminal) it is reused, no second one is started
+ *   bun run start --browser       same as `bun run webui`
+ *   bun run gtk4                  the native GTK4 client — backends must already be running
+ *                                 (`bun run start` in another terminal)
+ *   bun run start --host 0.0.0.0  pass any cli.ts flag straight through
  *   bun run start --cli           terminal mode through the default PipeWire mic/speaker
  *   bun run start --text          type instead of speaking
  *   bun run start --input-wav 1:q.wav --no-speaker --output-wav out.wav   (offline test)
@@ -19,6 +25,7 @@
  */
 
 import fs from "node:fs";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
@@ -60,16 +67,67 @@ if (needLlama) {
 // ── 3. the harness ───────────────────────────────────────────────────────────
 // Which mode: `--cli` first and foremost, then the offline-WAV flags, else the browser.
 const argv = process.argv.slice(2);
+// `bun run webui` (or an explicit --browser) is the only way to get Chromium; plain
+// `bun run start` serves the web UI but leaves the browser to you.
+const withBrowser = argv.includes("--browser") || process.env.SONIA_OPEN_BROWSER === "1";
+const rest = argv.filter((a) => a !== "--browser");
+const flag = (name: string, fallback: string) => {
+  const i = rest.indexOf(name);
+  return i >= 0 && rest[i + 1] ? rest[i + 1]! : fallback;
+};
+
+/** Is something already listening there? (the harness has no health route to ask) */
+function portOpen(host: string, port: number): Promise<boolean> {
+  return new Promise((res) => {
+    const s = net.connect({ host, port });
+    s.once("connect", () => s.end(() => res(true)));
+    s.once("error", () => res(false));
+    setTimeout(() => s.destroy(), 2000).unref();
+  });
+}
+
 const cliArgs: string[] =
   argv[0] === "--cli"
     ? argv.slice(1)
     : argv.includes("--text") || argv.includes("--input-wav")
       ? argv
-      : ["--web", ...argv];
+      : ["--web", ...(withBrowser ? [] : ["--no-browser"]), ...rest];
 
+// ── 3b. an already-running harness owns the port ─────────────────────────────
+// `bun run webui` is meant to be run *next to* `bun run start`: reuse that harness
+// and just put the Chromium window on it, instead of dying on EADDRINUSE. The port is
+// probed first; if the child still loses the race, its EADDRINUSE lands us here too.
+const browserWeb = withBrowser && cliArgs[0] === "--web" && !cliArgs.includes("--no-browser");
+const host = flag("--host", "127.0.0.1");
+const port = Number(flag("--port", "8095"));
+
+/** Attach the Chromium window to the harness already serving `url`, then idle. */
+async function reuseHarness(): Promise<never> {
+  const url = `http://${host}:${port}/`;
+  console.log(`\u267b\ufe0f  reusing the harness already on ${url} \u2014 opening Chromium only`);
+  const { launchChromium } = await import("../src/web");
+  launchChromium(url);
+  // the window is the whole job: hold the script open until Ctrl+C
+  await new Promise<void>((res) => {
+    process.on("SIGINT", res);
+    process.on("SIGTERM", res);
+  });
+  process.exit(0);
+}
+
+if (browserWeb && (await portOpen(host, port))) await reuseHarness();
+
+// stderr is piped (and echoed straight through) only so that an EADDRINUSE can be
+// recognised and turned into the reuse path instead of a fatal error.
+let tail = "";
 const child = spawn(process.execPath, ["run", "src/cli.ts", ...cliArgs], {
   cwd: ROOT,
-  stdio: "inherit",
+  stdio: ["inherit", "inherit", "pipe"],
+});
+child.stderr?.on("data", (b: Buffer) => {
+  tail += b.toString();
+  if (tail.length > 8192) tail = tail.slice(-8192);
+  process.stderr.write(b);
 });
 
 // pid file for `bun run stop` — the pid that actually listens on :8095, not ours.
@@ -87,6 +145,10 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
 const [code, signal] = await new Promise<[number | null, NodeJS.Signals | null]>((res) => {
   child.once("close", (c, s) => res([c, s]));
 });
+// lost the race for the port between the probe and the listen: something else owns it,
+// and attaching a window to that harness is exactly what `bun run webui` is for.
+if (browserWeb && code === 1 && tail.includes("EADDRINUSE")) await reuseHarness();
+
 // a startup failure (EADDRINUSE, warmup, LLM/TTS down) must not look like a success:
 // scripts/run.ts and any caller see a non-zero exit code. A child that dies from a signal
 // reports 128+N, the same the shell used to return after `exec bun run src/cli.ts`.

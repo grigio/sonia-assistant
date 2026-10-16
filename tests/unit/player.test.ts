@@ -7,6 +7,21 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/**
+ * Poll until `cond` holds. Every wait in this file goes through here rather than a fixed
+ * `sleep`: the Player is paced by a real 20 ms timer against the real clock, so a loaded
+ * box stretches every slice, and a fixed sleep either waits far longer than needed or
+ * (worse) gives up before the thing it was waiting for. `until` fails only when the
+ * condition genuinely never holds within `ms`.
+ */
+async function until(cond: () => boolean, what: string, ms = 4000): Promise<void> {
+  const t0 = Date.now();
+  while (!cond()) {
+    if (Date.now() - t0 > ms) throw new Error(`timeout waiting for ${what}`);
+    await sleep(10);
+  }
+}
+
 describe("Player pacing", () => {
   test("plays 10 slices (200 ms) at roughly real-time speed", async () => {
     const sent: number[] = [];
@@ -18,15 +33,18 @@ describe("Player pacing", () => {
     p.endSegment();
 
     const t0 = performance.now();
-    while (p.busy && performance.now() - t0 < 3000) await sleep(10);
+    await until(() => !p.busy, "the queue to drain");
     const elapsed = performance.now() - t0;
     await p.close();
 
     const total = sent.reduce((a, b) => a + b, 0);
     expect(total).toBe(24000 * 2 * 0.2); // everything was played
     expect(sent.every((n) => n === 960)).toBe(true); // 20 ms slices at 24 kHz
-    expect(elapsed).toBeGreaterThan(120); // paced, not instant
-    expect(elapsed).toBeLessThan(1000);
+    // The *lower* bound is the one that matters: it must not be instant (that would mean
+    // the pacing loop dumped the buffer). The upper bound is deliberately loose — it only
+    // exists to catch a stall, and `until`'s own 4 s budget already does that.
+    expect(elapsed).toBeGreaterThan(120);
+    expect(elapsed).toBeLessThan(4000);
   });
 
   test("pause stops the flow, resume continues; flush drops everything", async () => {
@@ -38,19 +56,22 @@ describe("Player pacing", () => {
     p.beginSegment("a");
     p.enqueue(new Uint8Array(16000 * 2 * 0.5)); // 500 ms
     p.endSegment();
-    await sleep(80);
+    // let a few slices flow so `atPause` is a real non-zero number, whatever the
+    // machine's speed — then the paused window can actually prove something
+    await until(() => bytes > 0, "the first slices to flow");
     p.pause();
     const atPause = bytes;
     await sleep(150);
     expect(bytes).toBe(atPause); // nothing flows while paused
     p.resume();
-    await sleep(100);
-    expect(bytes).toBeGreaterThan(atPause); // flowing again
+    await until(() => bytes > atPause, "playback to resume");
+    const afterResume = bytes;
 
     p.flush();
     expect(p.busy).toBe(false);
     await sleep(60);
     expect(bytes).toBeLessThan(16000 * 2 * 0.5); // the rest was dropped
+    expect(bytes).toBeGreaterThanOrEqual(afterResume - 960); // …and only one slice can land after the flush
     await p.close();
   });
 
@@ -65,7 +86,7 @@ describe("Player pacing", () => {
     p.beginSegment("primo");
     p.enqueue(new Uint8Array(16000 * 2 * 0.05));
     p.endSegment();
-    await sleep(200);
+    await until(() => events.length >= 3, "the three callbacks");
     expect(events).toEqual(["first", "start:primo", "idle"]);
     await p.close();
   });

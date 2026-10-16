@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Sonia GTK4 — "send": a plain right arrow, like the web UI asks for.
+     GTK recolours any *-symbolic* icon by alpha, so the colour below only
+     matters for editors/preview; the stroke is already the UI text colour, because
+     these are loaded as *files* (no theme recolouring). -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"
+     fill="none" stroke="#e6e8ee" stroke-width="1.7"
+     stroke-linecap="round" stroke-linejoin="round">
+  <line x1="3" y1="12" x2="18.5" y2="12"/>
+  <polyline points="13.5 6.5 18.5 12 13.5 17.5"/>
+</svg>

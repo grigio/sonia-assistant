@@ -1,0 +1,91 @@
+# Maintainer: Sonia assistant <sonia@localhost>
+#
+# sonia-gtk4 — native GTK4 client for the sonia-assistant harness, packaged for
+# Arch from a local checkout (no download, no network at build time except the
+# npm registry for @jsr/sigmasd__gtk).
+#
+#   cd sonia-gtk4/packaging && makepkg -si
+#
+# Installs:
+#   /usr/lib/sonia-gtk4/            the app (TS sources + node_modules)
+#   /usr/bin/sonia-gtk4             launcher
+#   /usr/share/applications/sonia-gtk4.desktop
+#   /usr/share/icons/hicolor/256x256/apps/sonia-gtk4.png
+#   /etc/sonia-gtk4/env             config (HARNESS_URL, LOCALE, ...)
+pkgname=sonia-gtk4
+pkgver=0.2.0
+pkgrel=1
+pkgdesc="Native GTK4 client for the Sonia voice assistant (talks the harness /ws)"
+arch=('x86_64')
+url="https://github.com/"
+license=('GPL-3.0-only')
+# bun runs the TS sources; jsGTK dlopens GTK4 at runtime.
+depends=('bun' 'gtk4' 'gdk-pixbuf2' 'pango' 'cairo' 'glib2' 'pipewire' 'wireplumber')
+optdepends=('imagemagick: 256x256 icon (otherwise the original PNG is installed as-is)')
+# local build: no sources, everything is read from the checkout above packaging/
+sha256sums=()
+
+
+build() {
+  cd "$startdir/../.."
+
+  # jsGTK (@jsr/sigmasd__gtk) — the only runtime dependency of the client.
+  cd sonia-gtk4
+  bun install --frozen-lockfile
+
+  cd ..
+
+  # sanity check: the app must at least typecheck/parse
+  cd sonia-gtk4
+  bun build --no-bundle main.ts --outdir "$srcdir/.build-check" >/dev/null
+  rm -rf "$srcdir/.build-check"
+}
+
+package() {
+  _pkgdir="$pkgdir/usr/lib/sonia-gtk4"
+  cd "$startdir/../.."
+
+  install -Dm755 "$startdir/sonia-gtk4-launcher" "$pkgdir/usr/bin/sonia-gtk4"
+
+  install -d "$_pkgdir"
+  for f in sonia-gtk4/*.ts sonia-gtk4/package.json sonia-gtk4/bun.lock sonia-gtk4/tsconfig.json; do
+    install -Dm644 "$f" "$_pkgdir/$(basename "$f")"
+  done
+
+  # runtime deps of the app (jsGTK), minus dev cruft
+  install -d "$_pkgdir/node_modules"
+  cp -a sonia-gtk4/node_modules/. "$_pkgdir/node_modules/"
+  rm -rf "$_pkgdir/node_modules/.cache"
+
+  install -Dm644 "$startdir/sonia-gtk4.desktop" \
+    "$pkgdir/usr/share/applications/sonia-gtk4.desktop"
+
+  # icon: 256x256 if ImageMagick is around, otherwise the original
+  icon_tmp="$(mktemp --suffix=.png)"
+  if command -v magick >/dev/null 2>&1; then
+    magick sonia.png -resize 256x256 -background none -gravity center -extent 256x256 "$icon_tmp"
+  elif command -v convert >/dev/null 2>&1; then
+    convert sonia.png -resize 256x256 -background none -gravity center -extent 256x256 "$icon_tmp"
+  else
+    cp sonia.png "$icon_tmp"
+  fi
+  install -Dm644 "$icon_tmp" "$pkgdir/usr/share/icons/hicolor/256x256/apps/sonia-gtk4.png"
+  rm -f "$icon_tmp"
+
+  # config: env file + a .env alias so main.ts's LOCALE lookup finds it
+  install -Dm644 "$startdir/env.example" "$pkgdir/etc/sonia-gtk4/env"
+  ln -sf env "$pkgdir/etc/sonia-gtk4/.env"
+}
+
+post_install() {
+  echo ">>> sonia-gtk4 installed. Edit /etc/sonia-gtk4/env (HARNESS_URL, LOCALE)."
+  echo ">>> Start the harness first: 'bun run start' in the sonia-assistant repo"
+  echo ">>> (that's the default, headless mode; 'bun run webui' opens the Chromium UI instead)."
+  update-desktop-database -q "$pkgdir/usr/share/applications" 2>/dev/null || true
+  gtk-update-icon-cache -qtf "$pkgdir/usr/share/icons/hicolor" 2>/dev/null || true
+}
+
+post_remove() {
+  update-desktop-database -q /usr/share/applications 2>/dev/null || true
+  gtk-update-icon-cache -qt /usr/share/icons/hicolor 2>/dev/null || true
+}

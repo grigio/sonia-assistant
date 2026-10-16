@@ -151,9 +151,10 @@ bun run runtime-check                   # 6. verify everything answers
 ### Run
 
 ```bash
-bun run start              # three audio.cpp servers + the harness → http://127.0.0.1:8095/
+bun run start              # ALL the backends: three audio.cpp servers + the harness → http://127.0.0.1:8095/ (no Chromium)
+bun run webui              # …same backends, but opens the embedded Chromium UI (reuses an already-running harness)
+bun run gtk4               # the native GTK4 app — client only, the backends must already be up (bun run start)
 bun run stop               # …plus the audio servers
-bun run start --no-browser # same, print the URL only
 bun run start --cli        # terminal through PipeWire mic/speaker
 bun run start --text       # typed input
 bun run stop --all         # …plus llama-server (the systemd unit)

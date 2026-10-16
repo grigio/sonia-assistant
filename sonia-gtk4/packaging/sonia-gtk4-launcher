@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# sonia-gtk4 — launcher installed by the sonia-gtk4 package.
+# Runs the native GTK4 client out of /usr/lib/sonia-gtk4 with the environment
+# from /etc/sonia-gtk4/env (and ~/.config/sonia-gtk4/env, which wins).
+#
+# It does NOT start the harness: llama-server, the audio.cpp servers and the
+# harness on :8095 must already be up (`bun run start` in the repo).
+set -euo pipefail
+
+PKG_DIR=/usr/lib/sonia-gtk4
+
+load_env() {
+  local f key
+  for f in /etc/sonia-gtk4/env "$HOME/.config/sonia-gtk4/env"; do
+    [ -f "$f" ] || continue
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in ''|'#'*) continue ;; esac
+      key="${line%%=*}"
+      key="${key//[[:space:]]/}"
+      [ -n "${!key:-}" ] && continue   # already set in the environment wins
+      export "$line"
+    done <"$f"
+  done
+}
+
+# main.ts looks for a project .env next to the repo root (one level up from the
+# app); point it at /etc/sonia-gtk4/env so LOCALE keeps working from the package.
+load_env
+SONIA_GTK4_ROOT="${SONIA_GTK4_ROOT:-/etc/sonia-gtk4}"
+export SONIA_GTK4_ROOT HARNESS_URL="${HARNESS_URL:-http://127.0.0.1:8095}"
+
+exec bun run "$PKG_DIR/main.ts" "$@"
