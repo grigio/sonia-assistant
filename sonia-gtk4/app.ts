@@ -120,6 +120,8 @@ type ToolCard = {
 type ThinkBlock = {
   node: ChatNode;
   btn: ToggleButton;
+  /** the reasoning as it streamed in (body holds the collapsed, cleaned peek) */
+  raw: string;
   body: Label;
 };
 
@@ -414,6 +416,7 @@ export class SoniaApp {
   private toolCards = new Map<string, ToolCard>();
   private botBubble: ChatNode | null = null;
   private thinkBlock: ThinkBlock | null = null;
+  private widthChars = 62;
 
   // ── banner ──
   private banner: TaskChip[] = [];
@@ -495,6 +498,14 @@ export class SoniaApp {
     // that grows, and it scrolls. HIG asks for a size that works on the smallest
     // supported screen, not for the biggest that looks good on a large one.
     win.setDefaultSize(560, 620);
+    // the 💭 block and the partial line size themselves in chars: on a narrow or
+    // resized window a fixed 90-char label is wider than the window and pushes it
+    // wider, which is how the reasoning box used to resize the window. Recompute
+    // the budget from the real width whenever it changes.
+    const remeasure = () => this.applyWidthBudget();
+    win.connect("notify::default-width", remeasure);
+    win.connect("notify::width", remeasure);
+    this.widthChars = this.charsFor(0);
     applyWindowIcon(win);
 
     const root = new Box(Orientation.VERTICAL, 0);
@@ -526,7 +537,7 @@ export class SoniaApp {
     this.partial.setMarginStart(18);
     this.partial.setMarginEnd(18);
     this.partial.setEllipsize(3); // PANGO_ELLIPSIZE_END
-    this.partial.setProperty("max-width-chars", 90);
+    this.partial.setProperty("max-width-chars", this.widthChars);
     root.append(this.partial);
 
     root.append(this.buildFooter());
@@ -1266,32 +1277,63 @@ export class SoniaApp {
       const btn = new ToggleButton();
       btn.addCssClass("btn-flat");
       btn.setHalign(Align.START);
+      // the button label stays short (a GtkButton label does not wrap, and a long
+      // one makes the window wider); the peek lives in the clamped body below
       const body = sel(new Label(""));
       body.addCssClass("think-body");
       body.setWrap(true);
       body.setXalign(0);
       body.setVisible(false);
-      body.setProperty("max-width-chars", 90);
-      btn.onToggled(() => body.setVisible(btn.getActive()));
+      body.setProperty("max-width-chars", this.widthChars);
+      btn.onToggled(() => {
+        body.setVisible(btn.getActive());
+        this.updateThinkLabel(this.thinkBlock!);
+      });
       box.append(btn);
       box.append(body);
       row.setChild(box);
       this.thinkBlock = {
         node: { row, cp: null, isMsg: false, infos: [] },
         btn,
+        raw: "",
         body,
       };
       this.nodes.push(this.thinkBlock.node);
       this.appendRow(row);
     }
     const tb = this.thinkBlock;
-    tb.body.setText(tb.body.getText() + text);
-    const full = tb.body.getText();
-    const peek = full.replace(/\s+/g, " ").trim().slice(0, 100);
-    tb.btn.setLabel(
-      `💭 ${this.t("think.label")} ${this.tf("think.chars", { n: full.length })} · ${peek}`,
-    );
+    tb.raw += text;
+    this.updateThinkLabel(tb);
     this.scrollToBottom();
+  }
+
+  private updateThinkLabel(tb: NonNullable<ThinkBlock>): void {
+    const full = tb.raw;
+    // short on the button (a GtkButton label does not wrap, so a long peek would
+    // make the window wider); the full text lives in the body, which wraps and
+    // is clamped to the window width
+    tb.btn.setLabel(
+      `💭 ${this.t("think.label")} ${this.tf("think.chars", { n: full.length })}`,
+    );
+    tb.body.setText(full.trimStart());
+  }
+
+  /** chars that fit the window, minus margins + an ellipsize margin */
+  private charsFor(width: number): number {
+    const w = width > 100 ? width : 560;
+    return Math.max(28, Math.min(90, Math.floor((w - 60) / 7.2)));
+  }
+
+  /** re-clamp every width-driven label after a window resize */
+  private applyWidthBudget(): void {
+    const w = Number(this.win.getProperty("width") ?? 0);
+    this.widthChars = this.charsFor(w);
+    this.partial.setProperty("max-width-chars", this.widthChars);
+    const tb = this.thinkBlock;
+    if (tb) {
+      tb.body.setProperty("max-width-chars", this.widthChars);
+      this.updateThinkLabel(tb);
+    }
   }
 
   // ───────────────────────────── banner (tasks) ─────────────────────────────
