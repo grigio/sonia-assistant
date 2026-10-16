@@ -1,4 +1,4 @@
-# Type check + the hermetic suites on every push/PR.
+# Type check + lint + the hermetic suites on every push/PR.
 #
 # `tests/unit` and `tests/ws-skills.test.ts` are self-contained: llama-server and the three
 # audio.cpp servers are mocked and the state lives in temp dirs. The only real file either
@@ -14,7 +14,7 @@ on:
 
 jobs:
   unit:
-    name: typecheck + unit + websocket tests
+    name: typecheck + lint + unit + websocket tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,9 +26,22 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      # strict, no emit — the same gate `bun run test` runs as its pretest
+      # strict, no emit — the same gate `bun run test` runs as its pretest.
+      # Covers src/, tests/ *and* scripts/ (the stop/run process managers included).
       - name: Type check
         run: bun run typecheck
+
+      # Biome: format + lint over src/, tests/, scripts/ and the GTK4 client.
+      - name: Lint
+        run: bun run lint
+
+      # The native client has its own tsconfig (and its own deps); types only — no GTK
+      # runtime needed here, which is why it can run on this runner too.
+      - name: Type check the GTK4 client
+        working-directory: sonia-gtk4
+        run: |
+          bun install --frozen-lockfile
+          ../node_modules/.bin/tsc -p tsconfig.json
 
       # everything the WebSocket suite loads from disk: one package of the model plan
       - name: Fetch the VAD model (2.3 MB)
