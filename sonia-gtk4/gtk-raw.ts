@@ -30,8 +30,14 @@ import type { Widget } from "@sigmasd/gtk/gtk4";
 
 const gtk = dlopen("libgtk-4.so.1", {
   gtk_widget_get_parent: { args: ["ptr"], returns: "ptr" },
+  gtk_window_set_icon_name: { args: ["ptr", "ptr"], returns: "void" },
+  gtk_window_set_default_icon_name: { args: ["ptr"], returns: "void" },
 }) as unknown as {
-  symbols: { gtk_widget_get_parent: (w: unknown) => unknown };
+  symbols: {
+    gtk_widget_get_parent: (w: unknown) => unknown;
+    gtk_window_set_icon_name: (w: unknown, name: unknown) => void;
+    gtk_window_set_default_icon_name: (name: unknown) => void;
+  };
 };
 
 const glib = dlopen("libglib-2.0.so.0", {
@@ -117,4 +123,36 @@ export function vadjustmentOf(sw: ScrolledWindow): Adjustment {
   const adj = Object.create(Adjustment.prototype) as Adjustment;
   if (raw) adj.ptr = raw as Adjustment["ptr"];
   return adj;
+}
+
+/**
+ * The icon of a window (the task switcher, Alt-Tab, the WM's title bar).
+ *
+ * jsGTK binds neither `gtk_window_set_icon` nor `..._set_default_icon_name`, and
+ * a window with no icon of its own is the generic blank block everyone recognises
+ * from a half-finished app — so the one symbol we need goes through FFI, same
+ * libgtk-4 the widgets themselves come from.
+ *
+ * Returns false when the symbol is not there, so the caller can stay quiet rather
+ * than pretend the icon worked.
+ */
+export function setWindowIcon(w: Widget, iconName: string): boolean {
+  try {
+    if (typeof gtk.symbols.gtk_window_set_icon_name !== "function") return false;
+    gtk.symbols.gtk_window_set_icon_name(w.ptr, iconName);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Icon for every window that has none of its own (main + preferences). */
+export function setDefaultIconName(iconName: string): boolean {
+  try {
+    if (typeof gtk.symbols.gtk_window_set_default_icon_name !== "function") return false;
+    gtk.symbols.gtk_window_set_default_icon_name(iconName);
+    return true;
+  } catch {
+    return false;
+  }
 }

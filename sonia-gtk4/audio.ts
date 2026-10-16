@@ -20,16 +20,168 @@
 import { spawn, type ChildProcess } from "node:child_process";
 
 export const MIC_RATE = 16000;
+/** High-pass corner (Hz) for the capture chain; `SONIA_MIC_HPF=0` turns it off. */
+export function hpfHz(): number {
+  const v = Number(process.env.SONIA_MIC_HPF ?? 350);
+  return Number.isFinite(v) ? v : 350;
+}
+/** Gate sensitivity: how far above the learned floor a frame must sit (SONIA_MIC_GATE). */
+export function gateRatio(): number {
+  const v = Number(process.env.SONIA_MIC_GATE ?? 2.5);
+  return Number.isFinite(v) && v > 0 ? v : 2.5;
+}
 export const FRAME_SAMPLES = 512; // 32 ms — what QueueMic on the server re-chunks to
 export const FRAME_BYTES = FRAME_SAMPLES * 2;
 
 /** Peak (0..1) of a s16 PCM frame, and the frame itself. */
 export type MicFrame = { pcm: Uint8Array; peak: number };
 
+/**
+ * Adaptive noise gate.
+ *
+ * A quiet room is not digital silence: the laptop's internal mic picks up a
+ * steady low rumble (measured here: rms ≈ 0.016, energy concentrated at
+ * 100–300 Hz, with occasional bursts to peak 0.08). The harness' Silero VAD
+ * reads that as speech with probability ~1.0 — six seconds of a silent room
+ * produced 123/186 frames over the 0.5 start threshold, so the assistant kept
+ * "hearing" you. A high-pass filter only takes the edge off it (mean probability
+ * 0.38 at 400 Hz), so the level has to be gated as well.
+ *
+ * The gate learns the floor from the quietest frames it sees and only lets
+ * through what stands clearly above it. A gated frame is sent as zeros, never
+ * dropped: the harness still gets a continuous 32 ms stream (barge-in, AEC and
+ * the timing of the silence gap all assume no gaps), it just sees actual silence
+ * instead of room noise.
+ *
+ * Speech must survive the gate, so the floor only ever follows frames the gate
+ * already considers noise — speech can never raise the floor and mute itself.
+ */
+export class NoiseGate {
+  private floor: number;
+  /** Frames at/under the floor seen so far, for `gateStats()`. */
+  private gated = 0;
+  private seen = 0;
+
+  constructor(
+    /** rms above `floor * ratio` is let through. */
+    readonly ratio = 2.5,
+    /** Never gate below this rms, however quiet the room is. */
+    readonly absFloor = 0.006,
+    /** Initial guess before any frame has been seen. */
+    floor = 0.008,
+  ) {
+    this.floor = floor;
+  }
+
+  /** Current learned noise floor (rms, 0..1). */
+  get level(): number {
+    return this.floor;
+  }
+
+  /**
+   * `keep` is true when the frame is loud enough to pass. `rms` of a rejected
+   * frame pulls the floor down (fast), anything else lifts it back slowly —
+   * the asymmetry is what keeps speech from being absorbed into the floor.
+   */
+  keep(rms: number): boolean {
+    this.seen++;
+    const pass = rms >= Math.max(this.absFloor, this.floor * this.ratio);
+    if (pass) {
+      this.floor += (rms - this.floor) * 0.0005;
+    } else {
+      this.gated++;
+      this.floor = Math.min(this.floor, rms + (this.floor - rms) * 0.08);
+    }
+    return pass;
+  }
+
+  gateStats(): { gated: number; seen: number; floor: number } {
+    return { gated: this.gated, seen: this.seen, floor: this.floor };
+  }
+
+  reset(): void {
+    this.floor = 0.008;
+    this.gated = 0;
+    this.seen = 0;
+  }
+}
+
+/**
+ * Fourth-order high-pass (two cascaded Butterworth biquads).
+ *
+ * The rumble a quiet room produces sits under ~300 Hz — the phone band edge —
+ * while speech carries almost all of its intelligibility above it. Filtering
+ * there is what makes the level gate below able to tell the two apart: measured
+ * on a silent room, the per-frame rms went from 0.056 to well under half that
+ * with the low band gone, while a loud 140 Hz voice fundamental is attenuated
+ * but still audible to the ASR (the formants and fricatives above 700 Hz carry
+ * the words). `fc <= 0` disables it.
+ */
+export class HighPass {
+  private b: number[] = [];
+  private a: number[] = [];
+  private x1 = new Float32Array(2);
+  private x2 = new Float32Array(2);
+  private o1 = new Float32Array(2);
+  private o2 = new Float32Array(2);
+
+  constructor(readonly fc = 350, readonly rate = MIC_RATE, stages = 2) {
+    if (fc <= 0) return;
+    const w = (2 * Math.PI * fc) / rate;
+    const c = Math.cos(w);
+    const sin = Math.sin(w);
+    const k = sin / (2 * Math.SQRT1_2); // Butterworth Q
+    const a0 = 1 + k;
+    this.b = [(1 + c) / 2 / a0, -(1 + c) / a0, ((1 + c) / 2) / a0];
+    this.a = [(-2 * c) / a0, (1 - k) / a0];
+    this.stages = stages;
+  }
+
+  private stages = 2;
+
+  get enabled(): boolean {
+    return this.fc > 0;
+  }
+
+  /** Filter an s16 frame in place and return it (no allocation in steady state). */
+  apply(pcm: Uint8Array): Uint8Array {
+    if (!this.enabled) return pcm;
+    const v = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.byteLength >> 1);
+    for (let s = 0; s < this.stages; s++) {
+      const [b0, b1, b2] = this.b;
+      const [a1, a2] = this.a;
+      let x1 = this.x1[s]!, x2 = this.x2[s]!, o1 = this.o1[s]!, o2 = this.o2[s]!;
+      for (let i = 0; i < v.length; i++) {
+        const x = v[i]! / 32768;
+        const y = b0! * x + b1! * x1 + b2! * x2 - a1! * o1 - a2! * o2;
+        x2 = x1; x1 = x; o2 = o1; o1 = y;
+        v[i] = Math.max(-32768, Math.min(32767, Math.round(y * 32768)));
+      }
+      this.x1[s] = x1; this.x2[s] = x2; this.o1[s] = o1; this.o2[s] = o2;
+    }
+    return pcm;
+  }
+
+  /** Where the filter is now — a device switch resets it (a new stream, new floor). */
+  reset(): void {
+    this.x1.fill(0); this.x2.fill(0); this.o1.fill(0); this.o2.fill(0);
+  }
+}
+
+/** An all-zero frame of `FRAME_BYTES`, reused instead of allocating per frame. */
+export const SILENT_FRAME = (() => {
+  const z = new Uint8Array(FRAME_BYTES);
+  return z;
+})();
+
 export class Mic {
   private proc: ChildProcess | null = null;
   private stopping = false;
   muted = false;
+  /** Level gate in front of the harness' VAD — see NoiseGate. */
+  readonly gate = new NoiseGate(gateRatio());
+  /** Removes the low rumble the gate then works on — see HighPass. */
+  readonly hp = new HighPass(hpfHz());
   onFrame: ((f: MicFrame) => void) | null = null;
   /** Stream ended without stop() — pw-record died (device gone, bad --target). */
   onEnd: ((err: string) => void) | null = null;
@@ -43,6 +195,7 @@ export class Mic {
   start(): void {
     if (this.running) return;
     this.stopping = false;
+    this.hp.reset();
     const cmd = ["pw-record", "--rate", String(MIC_RATE), "--channels", "1",
       "--format", "s16", "--latency", "32ms"];
     if (this.target) cmd.push("--target", this.target);
@@ -85,6 +238,18 @@ export class Mic {
     this.target = target;
     this.stop();
     this.start();
+  }
+
+  /**
+   * High-pass, then gate, then hand the frame on: what leaves the mic is
+   * band-limited, and a frame the gate rejected leaves as zeros rather than as a
+   * hole in the stream (the harness assumes a continuous 32 ms cadence). The peak
+   * the UI draws is zeroed with it, so the dot stops pulsing at room noise.
+   */
+  gated(f: MicFrame): MicFrame {
+    const pcm = this.hp.apply(f.pcm);
+    if (this.gate.keep(rmsOf(pcm))) return pcm === f.pcm ? f : { pcm, peak: peakOf(pcm) };
+    return { pcm: SILENT_FRAME, peak: 0 };
   }
 }
 

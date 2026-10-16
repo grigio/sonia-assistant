@@ -52,6 +52,13 @@ package() {
     install -Dm644 "$f" "$_pkgdir/$(basename "$f")"
   done
 
+  # our own button glyphs — without these the send/sweep buttons quietly fall
+  # back to stock Adwaita icons (see applyIcon in app.ts)
+  install -d "$_pkgdir/icons"
+  for f in sonia-gtk4/icons/*.svg; do
+    install -Dm644 "$f" "$_pkgdir/icons/$(basename "$f")"
+  done
+
   # runtime deps of the app (jsGTK), minus dev cruft
   install -d "$_pkgdir/node_modules"
   cp -a sonia-gtk4/node_modules/. "$_pkgdir/node_modules/"

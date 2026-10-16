@@ -68,7 +68,7 @@ import type {
   TaskInfo,
 } from "./protocol";
 import { STALE_ON_RESET } from "./protocol";
-import { onGtkIdle, onGtkIdleOnce, parentOf, vadjustmentOf } from "./gtk-raw";
+import { onGtkIdle, onGtkIdleOnce, parentOf, setDefaultIconName, setWindowIcon, vadjustmentOf } from "./gtk-raw";
 import { makeI18n, type I18n } from "./i18n";
 import { Mic, Speaker, type MicFrame } from "./audio";
 
@@ -406,6 +406,7 @@ export class SoniaApp {
     this.win = win;
     win.setTitle("Sonia");
     win.setDefaultSize(720, 760);
+    applyWindowIcon(win);
 
     const root = new Box(Orientation.VERTICAL, 0);
     win.setChild(root);
@@ -2111,6 +2112,28 @@ function shortModel(name: string): string {
 }
 
 const ICON_DIR = path.join(import.meta.dir, "icons");
+
+/**
+ * Window icon.
+ *
+ * The packaged client installs `sonia-gtk4.png` into the hicolor theme — that is
+ * what the .desktop entry's `Icon=` resolves and the name the theme can look up —
+ * so it is applied by *name* through `gtk_window_set_icon_name`, and as the
+ * default for every window that has none of its own. A window with no icon shows
+ * up as the generic blank block in the task switcher and Alt-Tab.
+ */
+const APP_ICON_NAME = "sonia-gtk4";
+
+/** Best effort: a missing icon must never keep the window from opening. */
+export function applyWindowIcon(win: ApplicationWindow): boolean {
+  try {
+    setDefaultIconName(APP_ICON_NAME);
+    return setWindowIcon(win, APP_ICON_NAME);
+  } catch (e) {
+    console.log("[ui] window icon unavailable:", e);
+    return false;
+  }
+}
 
 /**
  * Icon on a button: our own SVG (`sonia-gtk4/icons/*.svg`) when it is there,
