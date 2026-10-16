@@ -490,7 +490,11 @@ export class SoniaApp {
     const win = new ApplicationWindow(this.app);
     this.win = win;
     win.setTitle("Sonia");
-    win.setDefaultSize(720, 760);
+    // 560x620 fits a 1366x768 screen (and half of a 1280x800 one) with the
+    // panel and taskbar taken, where 720x760 did not: the chat is the only part
+    // that grows, and it scrolls. HIG asks for a size that works on the smallest
+    // supported screen, not for the biggest that looks good on a large one.
+    win.setDefaultSize(560, 620);
     applyWindowIcon(win);
 
     const root = new Box(Orientation.VERTICAL, 0);
