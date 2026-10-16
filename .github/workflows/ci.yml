@@ -86,7 +86,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install makepkg's build dependencies
-        run: pacman -Syu --noconfirm --needed git make patch
+        run: pacman -Syu --noconfirm --needed git make patch unzip
 
       - name: Install bun (the runtime, and what the client sources run under)
         run: |
