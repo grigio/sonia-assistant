@@ -32,6 +32,12 @@ models/
 .env.local
 .env.*.local
 
+# the `pi` coding agent's own working state: worktrees under .pi/harness/ carry a
+# nested biome.json + tsconfig, which makes `biome check .` abort ("nested root
+# configuration") before it ever reaches src/. Ignoring the dir fixes both the lint
+# run and the untracked-file noise in `git status`.
+/.pi/
+
 # editors / OS
 .DS_Store
 *.swp

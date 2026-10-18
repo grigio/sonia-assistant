@@ -54,11 +54,36 @@ export const TTS_LANGS = ["italian", "english", "german", "portuguese", "spanish
 
 type Default = string | number | boolean;
 
-function env(name: string, def: Default): Default {
+/** The spellings a boolean env var accepts — anything else is a typo, not a value. */
+const BOOL_TRUE = new Set(["1", "true", "yes", "on"]);
+const BOOL_FALSE = new Set(["0", "false", "no", "off"]);
+
+/**
+ * Read one knob from the environment, coerced to the type of its default.
+ *
+ * Numbers throw on junk and enums warn (see `normalizeCmdMode`); booleans used to do
+ * neither — `BARGE_IN=flase` silently became `false`, flipping a behaviour the user
+ * thought they had set. Unknown spellings now warn and fall back to the field's own
+ * **default** (the value its author chose), so a typo is visible and never quietly
+ * disables something.
+ */
+export function env(
+  name: string,
+  def: Default,
+  log: (msg: string) => void = console.warn,
+): Default {
   const raw = process.env[name];
   if (raw === undefined || raw === "") return def;
   const trimmed = raw.trim();
-  if (typeof def === "boolean") return ["1", "true", "yes", "on"].includes(trimmed.toLowerCase());
+  if (typeof def === "boolean") {
+    const v = trimmed.toLowerCase();
+    if (BOOL_TRUE.has(v)) return true;
+    if (BOOL_FALSE.has(v)) return false;
+    log(
+      `⚠ ${name}=${raw} is not a boolean (1/true/yes/on | 0/false/no/off) — using the default ${def}`,
+    );
+    return def;
+  }
   if (typeof def === "number") {
     if (Number.isNaN(Number(trimmed))) throw new Error(`env ${name}: not a number: ${raw}`);
     return Number.isInteger(def) ? Math.trunc(Number(trimmed)) : Number(trimmed);
@@ -197,13 +222,13 @@ export class Config {
     );
   }
 
-  static fromEnv(): Config {
+  static fromEnv(log: (msg: string) => void = console.warn): Config {
     const cfg = new Config();
     const defaults: Record<string, Default> = {};
     for (const [key, value] of Object.entries(cfg)) defaults[key] = value as Default;
     for (const [key, def] of Object.entries(defaults)) {
       const name = key.replace(/([A-Z])/g, "_$1").toUpperCase(); // llmBaseUrl → LLM_BASE_URL
-      const val = env(name, def);
+      const val = env(name, def, log);
       if (typeof def === "boolean") {
         (cfg as unknown as Record<string, Default>)[key] = val as boolean;
       } else if (typeof def === "number") {
@@ -215,13 +240,13 @@ export class Config {
     // The enum modes get the one check their consumers cannot afford to miss: every
     // non-literal value acts as "auto" in `runCommand`'s `===` dispatch (and as "always
     // ask the judge" in the turn rules), so this is the only place the typo can be caught.
-    cfg.cmdMode = normalizeCmdMode(cfg.cmdMode);
-    cfg.decisionMode = normalizeDecisionMode(cfg.decisionMode);
+    cfg.cmdMode = normalizeCmdMode(cfg.cmdMode, log);
+    cfg.decisionMode = normalizeDecisionMode(cfg.decisionMode, log);
     // A typo'd pack name silently serves no GGUF (the audio server starts with an
     // unknown `language`, the voices dir resolves to nothing). Named packs only; a
     // custom TTS_VOICE_DIR may want whatever it wants.
     if (!TTS_LANGS.includes(cfg.ttsLang as (typeof TTS_LANGS)[number])) {
-      console.warn(
+      log(
         `⚠ TTS_LANG=${cfg.ttsLang} is none of ${TTS_LANGS.join("|")} — ` +
           `set TTS_VOICE_DIR if the pack under <MODELS_DIR>/PocketTTS-GGUF/custom/ is yours`,
       );

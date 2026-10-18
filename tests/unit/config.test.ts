@@ -56,10 +56,20 @@ describe("Config.fromEnv", () => {
       process.env.BARGE_IN = v;
       expect(Config.fromEnv().bargeIn).toBe(true);
     }
-    for (const v of ["0", "false", "no", "off", "anything"]) {
+    for (const v of ["0", "false", "no", "off", " OFF "]) {
       process.env.BARGE_IN = v;
       expect(Config.fromEnv().bargeIn).toBe(false);
     }
+  });
+
+  test("an unrecognised bool warns and keeps the default, never silently false", () => {
+    const warnings: string[] = [];
+    process.env.BARGE_IN = "flase";
+    // bargeIn defaults to true: the typo must not read as "off"
+    expect(Config.fromEnv((m) => warnings.push(m)).bargeIn).toBe(true);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("BARGE_IN=flase");
+    expect(warnings[0]).toContain("default true");
   });
 
   test("empty env value falls back to the default", () => {
