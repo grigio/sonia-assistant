@@ -12,6 +12,8 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$(readlink -f "$0")")/.." && pwd)"
 cd "$ROOT"
+# shellcheck source=scripts/rotate-log.sh
+source "$ROOT/scripts/rotate-log.sh"
 
 info() { printf '\033[1;34m[ui-test]\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[ui-test]\033[0m %s\n' "$*" >&2; exit 1; }
@@ -45,6 +47,7 @@ if [[ -z "$URL" ]]; then
   LOG="$ROOT/data/logs/ui-test-harness.log"
   mkdir -p "$ROOT/data/run" "$ROOT/data/logs"
   info "harness → $URL (log: ${LOG#"$ROOT"/})"
+  rotate_log "$LOG"
   # its own pi namespace: the tests' turns must never land in your data/pi conversations,
   # and its own chat file: the suite's turns must never land in your data/chat.json
   LLM_VIA_PI=1 PI_CWD="$ROOT/data/run/ui-test-pi" CHAT_PERSIST=0 \
@@ -68,6 +71,7 @@ CHROME="$(command -v chromium || command -v chromium-browser || command -v googl
           || echo /usr/lib/chromium/chromium)"
 [[ -x "$CHROME" ]] || die "no Chromium binary found"
 info "chromium → CDP :$CDP_PORT (profile $PROFILE)"
+rotate_log "$ROOT/data/logs/ui-test-chromium.log"
 "$CHROME" --headless --remote-debugging-port="$CDP_PORT" --user-data-dir="$PROFILE" \
   --no-first-run --no-default-browser-check --disable-gpu --mute-audio \
   --autoplay-policy=no-user-gesture-required about:blank \

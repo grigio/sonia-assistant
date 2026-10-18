@@ -43,6 +43,8 @@ LOGS="$ROOT/data/logs"      # *.log only — git-ignored, see .gitignore
 M="${MODELS_DIR:-$ROOT/models}"
 case "$M" in /*) ;; *) M="$ROOT/${M#./}" ;; esac
 mkdir -p "$RUN" "$LOGS"
+# shellcheck source=scripts/rotate-log.sh
+source "$ROOT/scripts/rotate-log.sh"
 
 ASR_BACKEND="${ASR_BACKEND:-vulkan}"
 TTS_BACKEND="${TTS_BACKEND:-cpu}"
@@ -116,6 +118,7 @@ start_one() {  # name port
     info "$name already listening on :$port"; return
   fi
   info "starting $name on :$port → ${LOGS#"$ROOT"/}/$name.log"
+  rotate_log "$LOGS/$name.log"
   nohup setsid "$BIN" --config "$RUN/$name.json" --no-ui --log >"$LOGS/$name.log" 2>&1 </dev/null &
   echo $! > "$RUN/$name.pid"
 }
