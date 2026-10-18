@@ -14,7 +14,7 @@
 #   /etc/sonia-gtk4/env             config (HARNESS_URL, LOCALE, ...)
 pkgname=sonia-gtk4
 pkgver=0.2.6
-pkgrel=1
+pkgrel=4
 pkgdesc="Native GTK4 client for the Sonia voice assistant (talks the harness /ws)"
 arch=('x86_64')
 url="https://github.com/"
