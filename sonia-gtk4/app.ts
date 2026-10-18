@@ -38,6 +38,8 @@ import {
   Display,
   DrawingArea,
   Entry,
+  EventControllerKey,
+  GestureClick,
   Image,
   Label,
   ListBox,
@@ -96,6 +98,7 @@ type ChatNode = {
   bubble?: Box; // the bubble box (info lines and «interrotto» go inside it)
   body?: Label; // the bubble's text label (streamed answers grow it)
   rew?: Button; // the ⟲ button of this line (history lines only)
+  rewOpen?: boolean; // ⟲ pinned open by a click on its bubble (not just hover)
   infos: Label[]; // info lines under the body
 };
 
@@ -335,11 +338,14 @@ const CSS = `
   .btn-flat:disabled { opacity: 0.35; }
   .task-chip .btn-flat { min-width: 22px; min-height: 22px; margin: 0 2px;
                          border-radius: 999px; }
+  /* the ⟲ stays invisible until its own line is hovered, focused or clicked */
   .rew { min-width: 20px; min-height: 20px; padding: 0; margin: 0;
          border-radius: 999px; background: transparent; border: none;
-         opacity: 0.4; font-size: 0.95em; }
-  .rew:hover { opacity: 1; background: alpha(@theme_fg_color, 0.08); }
-  .rew:disabled { opacity: 0.15; }
+         opacity: 0; font-size: 0.95em; }
+  row:hover .rew, row:focus-within .rew, .rew:focus, .rew.rew-open { opacity: 0.4; }
+  row:hover .rew:hover, .rew.rew-open:hover { opacity: 1;
+         background: alpha(@theme_fg_color, 0.08); }
+  row:hover .rew:disabled, .rew.rew-open:disabled { opacity: 0.15; }
 
   /* ── lists ───────────────────────────────────────────────────────────── */
   list, listview, row { background: transparent; }
@@ -850,7 +856,26 @@ export class SoniaApp {
     win.setWebsite(ABOUT_WEBSITE);
     win.setApplicationIcon(APP_ICON_NAME);
     win.setTransientFor(parent);
-    win.setModal(true); // it is modal: the main window is blocked while it is open
+    // NOT modal: the header ? is a toggle like the ⚙ drawer, and a modal window
+    // swallows the very click meant to close it again. Visible ? the parent stays
+    // clickable, so the button can show it and hide it in turn.
+    win.setModal(false);
+    // Same trap as the preferences drawer: a closed AdwWindow does not come back
+    // with present() — the second click on ? did nothing at all. Keep the object
+    // alive and just unmap it, then the button can always show it again.
+    win.onCloseRequest(() => {
+      win.setVisible(false);
+      return true; // block the default close (which would tear the window down)
+    });
+    // Esc dismisses it too: a non-modal window no longer traps the keyboard, so
+    // give keyboard-only users the same way out the × gives the mouse.
+    const esc = new EventControllerKey();
+    esc.onKeyPressed((keyval) => {
+      if (keyval !== 0xff1b) return false; // GDK_KEY_Escape
+      win.setVisible(false);
+      return true;
+    });
+    win.addController(esc);
     return win;
   }
 
@@ -1140,6 +1165,11 @@ export class SoniaApp {
     // the control never jumps sides as the conversation goes back and forth. Only the
     // group's alignment changes (user right, bot left); the order never does.
     node.rew = this.rewindBtn(node);
+    // A click on the bubble reveals (or hides) its ⟲ — the affordance touch and
+    // keyboard-less users get, since hover alone does not help there.
+    const tap = new GestureClick();
+    tap.onReleased(() => this.toggleRewind(node));
+    bubble.addController(tap);
     outer.append(node.rew);
     outer.append(bubble);
     if (kind === "user") {
@@ -1187,6 +1217,21 @@ export class SoniaApp {
 
   private stampLine(node: ChatNode, cp: number): void {
     node.cp = cp;
+  }
+
+  /** Reveal the ⟲ of the clicked bubble; clicking another line closes this one. */
+  private toggleRewind(node: ChatNode): void {
+    const btn = node.rew;
+    if (!btn) return;
+    const wasOpen = node.rewOpen === true;
+    for (const n of this.nodes) {
+      n.rewOpen = false;
+      n.rew?.removeCssClass("rew-open");
+    }
+    if (!wasOpen) {
+      node.rewOpen = true;
+      btn.addCssClass("rew-open");
+    }
   }
 
   private addEvent(text: string): void {
