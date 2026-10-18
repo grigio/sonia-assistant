@@ -21,6 +21,7 @@ import type { ClientCommand, ServerEvent } from "./events";
 import { Harness } from "./harness/harness";
 import { now } from "./harness/queues";
 import { type Locale, t, uiStringsJson } from "./i18n";
+import { SettingsStore } from "./settings";
 import { which } from "./util";
 
 const STATIC_DIR = path.join(ROOT, "static");
@@ -150,11 +151,18 @@ export class WebApp {
   /** The other `static/` files, same idea, capped (FIFO) so it can never grow wild. */
   private files = new Map<string, { mtimeMs: number; body: Buffer; type: string }>();
 
+  /** The drawer's runtime overrides (`data/settings.json`), loaded before the Harness. */
+  private readonly settings: SettingsStore;
+
   constructor(
     readonly cfg: Config,
     readonly host: string,
     readonly port: number,
   ) {
+    // The drawer's persisted choices override the `.env` baseline — applied here, before
+    // the Harness (and its `Tools`) read `cfg`, so a restart resumes them.
+    this.settings = new SettingsStore(path.join(cfg.dataDir, "settings.json"));
+    this.settings.apply(cfg);
     this.assistant = new Harness(cfg, this.mic, "callback");
   }
 
@@ -462,6 +470,9 @@ export class WebApp {
     if (typeof cmd.thinking === "boolean") cfg.llmDisableThinking = !cmd.thinking;
     // 🔊 the voice selector: validated against the pack, persisted, echoed back as `voices`
     if (typeof cmd.tts_voice === "string") a.setVoice(cmd.tts_voice);
+    // remember the drawer's runtime switches (`data/settings.json`): a restart resumes
+    // them instead of silently reverting to `.env`
+    this.settings.save(cfg);
     a.log(
       `⚙ config: half_duplex=${cfg.halfDuplex} barge_in=${cfg.bargeIn} ` +
         `decision=${cfg.decisionMode} commands=${cfg.cmdMode} ` +

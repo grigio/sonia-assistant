@@ -585,6 +585,17 @@ describe("the drawer's commands", () => {
     await sleep(150);
     expect(cfg.cmdMode).toBe("ask"); // junk → "ask" (the safest), not the previous value
     expect(cfg.decisionMode).toBe("auto"); // junk → the decision fallback ("auto")
+
+    // and the drawer's choices are persisted (`data/settings.json`), so a restart resumes
+    // them instead of snapping back to `.env`
+    const stored = JSON.parse(fs.readFileSync(path.join(dataDir, "settings.json"), "utf-8"));
+    expect(stored).toMatchObject({
+      halfDuplex: true,
+      bargeIn: false,
+      decisionMode: "auto",
+      cmdMode: "ask",
+      llmDisableThinking: false,
+    });
   });
 
   test("approve resolves a pending command, and a stale id is refused", async () => {
