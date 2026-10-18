@@ -103,10 +103,16 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      # git first: the release-notes step below shells out to it, and the base-devel
+      # image ships without it (that is why the notes came out empty — every `git`
+      # call failed with "git: command not found").
+      - name: Install the tools the steps below need
+        run: pacman -Syu --noconfirm --needed git make patch unzip
+
       # Release notes = every commit in this tag's range, grouped by conventional-commit
       # type, with the breaking changes called out first. Falls back to a flat list.
       #
-      # Finding the *previous* tag takes two tries. `git describe` is the accurate
+      # Finding the *previous* tag takes a few tries. `git describe` is the accurate
       # one (it only matches tags reachable from `<tag>^`), but it needs two things
       # a checkout does not promise: the *objects* behind the tag names, and the
       # parent of the tagging commit. On a shallow fetch `<tag>^` does not even
@@ -123,8 +129,13 @@ jobs:
           tag="${GITHUB_REF_NAME}"
 
           prev=""
-          for _ in 1 2; do
+          for _ in 1 2 3; do
+            # accurate: only tags reachable from the tagging commit's parent
             prev="$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)"
+            [ -n "$prev" ] && break
+            # describe needs the tag *objects*; this needs only the refs, and picks the
+            # highest version tag that is an ancestor of this one.
+            prev="$(git tag --merged "${tag}^" 2>/dev/null | grep -vx "${tag}" | sort -rV | head -n1 || true)"
             [ -n "$prev" ] && break
             if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
               git fetch --quiet --unshallow --tags --force origin 2>/dev/null || true
@@ -158,7 +169,7 @@ jobs:
             if [ -n "$prev" ]; then
               echo "_All commits since [\`${prev}\`](../../compare/${prev}...${tag})._"
             else
-              echo "_Initial release._"
+              echo "_No earlier tag found; listing the commits reachable from this tag._"
             fi
             echo
             emit() { # <heading> <body>
@@ -183,9 +194,6 @@ jobs:
           echo "--- release notes ---"
           cat release-notes.md
           echo "---------------------"
-
-      - name: Install makepkg's build dependencies
-        run: pacman -Syu --noconfirm --needed git make patch unzip
 
       # bun lands in /usr/local so the non-root `builder` user running makepkg can see it too
       - name: Install bun (the runtime, and what the client sources run under)
