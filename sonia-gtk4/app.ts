@@ -1987,7 +1987,7 @@ export class SoniaApp {
     }
   }
 
-  private sendBinary(bytes: Uint8Array): void {
+  private sendBinary(bytes: Uint8Array<ArrayBuffer>): void {
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     try {

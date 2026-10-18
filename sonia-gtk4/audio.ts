@@ -34,7 +34,7 @@ export const FRAME_SAMPLES = 512; // 32 ms — what QueueMic on the server re-ch
 export const FRAME_BYTES = FRAME_SAMPLES * 2;
 
 /** Peak (0..1) of a s16 PCM frame, and the frame itself. */
-export type MicFrame = { pcm: Uint8Array; peak: number };
+export type MicFrame = { pcm: Uint8Array<ArrayBuffer>; peak: number };
 
 /**
  * Adaptive noise gate.
@@ -148,7 +148,7 @@ export class HighPass {
   }
 
   /** Filter an s16 frame in place and return it (no allocation in steady state). */
-  apply(pcm: Uint8Array): Uint8Array {
+  apply(pcm: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
     if (!this.enabled) return pcm;
     const v = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.byteLength >> 1);
     for (let s = 0; s < this.stages; s++) {
