@@ -52,6 +52,65 @@ export function normalizeDecisionMode(raw: string, log = console.warn): Decision
 /** The Pocket TTS packs `models-download` knows (a custom TTS_VOICE_DIR needs none). */
 export const TTS_LANGS = ["italian", "english", "german", "portuguese", "spanish"] as const;
 
+/** `llmBaseUrl` → `LLM_BASE_URL` — the one spelling rule the env and `.env.example` share. */
+export function envName(key: string): string {
+  return key.replace(/([A-Z])/g, "_$1").toUpperCase();
+}
+
+/**
+ * Sanity ranges for the numeric knobs, keyed by the `Config` field name.
+ *
+ * `env()` already rejects junk (`TURN_CHECK_MS=abc` throws); these catch the *plausible*
+ * typo instead — a negative millisecond count, a threshold outside 0…1, a temperature
+ * above the sampler's max. A value outside its range is clamped, not thrown away, and a
+ * warning names the variable: the app keeps running on a sane value while the typo is
+ * still visible in the log (the same spirit as the boolean and enum handling).
+ */
+const RANGES: Record<string, { min?: number; max?: number }> = {
+  llmMaxTokens: { min: 1 },
+  llmTemperature: { min: 0, max: 2 },
+  llmReasoningBudget: { min: 0 },
+  llmContextWindow: { min: 0 },
+  piTimeoutS: { min: 1 },
+  cmdTimeoutS: { min: 1 },
+  cmdApprovalTimeoutS: { min: 1 },
+  asrFlushPadMs: { min: 0 },
+  healthPollMs: { min: 0 },
+  playbackLatencyMs: { min: 0 },
+  vadStartThreshold: { min: 0, max: 1 },
+  vadEndThreshold: { min: 0, max: 1 },
+  vadMinSpeechMs: { min: 0 },
+  prerollMs: { min: 0 },
+  turnCheckMs: { min: 1 },
+  minSilenceMs: { min: 0 },
+  silenceMs: { min: 0 },
+  maxSilenceMs: { min: 0 },
+  smartTurnThreshold: { min: 0, max: 1 },
+  bargeVadThreshold: { min: 0, max: 1 },
+  bargeMinMs: { min: 0 },
+  bargeConfirmWords: { min: 0 },
+  echoOverlap: { min: 0, max: 1 },
+};
+
+/**
+ * Clamp a numeric knob to its range, warning when it moved. Exported so a test (and any
+ * other reader) can pin the ranges without going through the environment.
+ */
+export function clampNumeric(
+  key: string,
+  value: number,
+  log: (msg: string) => void = console.warn,
+): number {
+  const range = RANGES[key];
+  if (!range) return value;
+  const out = Math.min(range.max ?? Infinity, Math.max(range.min ?? -Infinity, value));
+  if (out !== value) {
+    const bound = out === range.min ? `minimum ${range.min}` : `maximum ${range.max}`;
+    log(`⚠ ${envName(key)}=${value} is out of range — using ${out} (${bound})`);
+  }
+  return out;
+}
+
 type Default = string | number | boolean;
 
 /** The spellings a boolean env var accepts — anything else is a typo, not a value. */
@@ -227,12 +286,12 @@ export class Config {
     const defaults: Record<string, Default> = {};
     for (const [key, value] of Object.entries(cfg)) defaults[key] = value as Default;
     for (const [key, def] of Object.entries(defaults)) {
-      const name = key.replace(/([A-Z])/g, "_$1").toUpperCase(); // llmBaseUrl → LLM_BASE_URL
+      const name = envName(key); // llmBaseUrl → LLM_BASE_URL
       const val = env(name, def, log);
       if (typeof def === "boolean") {
         (cfg as unknown as Record<string, Default>)[key] = val as boolean;
       } else if (typeof def === "number") {
-        (cfg as unknown as Record<string, Default>)[key] = val as number;
+        (cfg as unknown as Record<string, Default>)[key] = clampNumeric(key, val as number, log);
       } else {
         (cfg as unknown as Record<string, Default>)[key] = String(val);
       }

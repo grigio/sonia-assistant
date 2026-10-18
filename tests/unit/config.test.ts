@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { Config, PI_DEFAULT_MODEL } from "../../src/config";
+import { Config, clampNumeric, PI_DEFAULT_MODEL } from "../../src/config";
 
 const KEYS = [
   "LLM_MAX_TOKENS",
@@ -90,5 +90,33 @@ describe("Config.fromEnv", () => {
     const cfg = Config.fromEnv();
     expect(cfg.decisionBaseUrl).toBe("http://127.0.0.1:8098/v1");
     expect(cfg.decisionModel).toBe("FrogNano-4B-2609-Q4_K_M");
+  });
+
+  test("a plausible-but-wrong number is clamped, and the typo is named", () => {
+    const warnings: string[] = [];
+    process.env.TURN_CHECK_MS = "-5";
+    process.env.VAD_START_THRESHOLD = "3";
+    try {
+      const cfg = Config.fromEnv((m) => warnings.push(m));
+      expect(cfg.turnCheckMs).toBe(1);
+      expect(cfg.vadStartThreshold).toBe(1);
+      expect(warnings.some((w) => w.includes("TURN_CHECK_MS=-5"))).toBe(true);
+      expect(warnings.some((w) => w.includes("VAD_START_THRESHOLD=3"))).toBe(true);
+    } finally {
+      delete process.env.TURN_CHECK_MS;
+      delete process.env.VAD_START_THRESHOLD;
+    }
+  });
+});
+
+describe("clampNumeric", () => {
+  test("clamps to the range a knob declares, and leaves the rest alone", () => {
+    const warnings: string[] = [];
+    const log = (m: string) => warnings.push(m);
+    expect(clampNumeric("llmTemperature", 5, log)).toBe(2);
+    expect(clampNumeric("llmTemperature", -1, log)).toBe(0);
+    expect(clampNumeric("echoOverlap", 0.6, log)).toBe(0.6);
+    expect(clampNumeric("unknownKnob", -42, log)).toBe(-42); // no rule → untouched
+    expect(warnings).toHaveLength(2);
   });
 });
