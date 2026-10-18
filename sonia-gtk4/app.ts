@@ -477,6 +477,18 @@ export class SoniaApp {
   private tf = (key: string, vars: Record<string, unknown>): string => this.i18n.tf(key, vars);
 
   async run(): Promise<void> {
+    // GApplication is single-instance per id on the session D-Bus. jsGTK's
+    // EventLoop.start() calls register() + activate() unconditionally and
+    // ignores that register() returned false, so a second launch — with the
+    // first instance (or a stale one) still owning `it.sonia.Assistant` —
+    // would never get the `activate` signal, never build a UI, and then spin
+    // in the poll loop forever: a hung terminal and no window. Detect the
+    // remote case, hand the activation to the primary, and exit cleanly.
+    this.app.register();
+    if (this.app.getIsRemote()) {
+      this.app.activate();
+      return;
+    }
     await this.loop.start(this.app);
   }
 
