@@ -98,8 +98,7 @@ const harnessUrl = process.env.HARNESS_URL ?? "http://127.0.0.1:8095";
 /** App version from package.json — shown in the about dialog. */
 export function appVersion(): string {
   try {
-    return JSON.parse(fs.readFileSync(path.join(import.meta.dir, "package.json"), "utf-8"))
-      .version;
+    return JSON.parse(fs.readFileSync(path.join(import.meta.dir, "package.json"), "utf-8")).version;
   } catch {
     return "?";
   }
