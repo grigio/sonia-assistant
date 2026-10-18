@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security / private matter
+    url: https://github.com/grigio/sonia-assistant/security/advisories/new
+    about: Do not open a public issue for a vulnerability — use a private advisory.
+  - name: Read the docs first
+    url: https://github.com/grigio/sonia-assistant/blob/master/README.md
+    about: Setup, security model and the env-var reference live in README and .env.example.

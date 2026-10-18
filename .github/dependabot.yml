@@ -1,0 +1,31 @@
+# Dependency updates. The whole runtime graph is small on purpose — `ws` and
+# `onnxruntime-node` at runtime, the type/tooling packages in dev — so weekly PRs are
+# cheap to review and keep the "no build step, pin the runtime" posture honest.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      dev-dependencies:
+        dependency-type: development
+
+  # The native client has its own package.json (and its own bun.lock).
+  - package-ecosystem: npm
+    directory: /sonia-gtk4
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(gtk4-deps)"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "chore(ci)"

@@ -1,0 +1,53 @@
+name: Bug report
+description: Something behaved differently from what you expected
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: run `bun run runtime-check` (and `bun run status`) so we know
+        which legs were up. Redact anything private from the logs.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The observed behaviour, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. `bun run start --cli`
+        2. say "…"
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: Output of `git describe --tags` (or the package version).
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: >
+        OS + kernel, CPU/GPU, whether the LLM leg is the API or `LLM_VIA_PI=1`, and any
+        `.env` values you changed. `bun --version` too.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: >
+        `data/logs/*.log`, `bun run status`, and any stack trace. The harness log is
+        always English regardless of `LOCALE`.
+      render: text
+    validations:
+      required: false

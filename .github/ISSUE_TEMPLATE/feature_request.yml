@@ -1,0 +1,36 @@
+name: Feature request
+description: Suggest a capability or a change
+title: "feat: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What does the assistant make hard or impossible today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like
+      description: The behaviour you want, from the user's seat. Not necessarily how to build it.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds, other designs, or why an existing setting does not cover it.
+    validations:
+      required: false
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Project constraints
+      description: >
+        Sonia targets local, no-dedicated-GPU, sub-15-GB operation. A request that needs a
+        cloud service or a GPU should say so explicitly.
+      options:
+        - label: This can run fully locally (no new cloud dependency)
+          required: false
