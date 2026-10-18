@@ -130,13 +130,17 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
-          # Even though checkout created a real repository here, this container job has
-          # surprised us before about which working directory / PATH its `run` shells get.
-          # Pin both, then fail loudly if `.git` is still not usable — silently degrading
-          # to "no previous tag" is what produced the wrong v0.3.0 notes.
+          # The workspace is a bind mount: the directory is owned by the runner's uid,
+          # while `actions/checkout` (running as root in this container) created `.git`
+          # as root. Git therefore sees mismatched ownership and refuses to touch the
+          # repo ("detected dubious ownership") unless the path is marked safe in the
+          # HOME of *this* step — checkout only did so in a temporary HOME of its own.
+          # The package-build step below marks it the same way, for the same reason.
           export PATH="/usr/bin:/usr/sbin:$PATH"
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           if ! git rev-parse --git-dir >/dev/null 2>&1; then
             echo "::error::not usable as a git repository: pwd=$(pwd) git=$(command -v git || echo MISSING)"
+            git rev-parse --git-dir || true
             ls -la | head -n 20
             exit 1
           fi
