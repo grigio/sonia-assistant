@@ -19,6 +19,10 @@ const GTK_STRINGS: Record<Locale, Record<string, string>> = {
     "gtk.prefs": "Impostazioni",
     "gtk.about.title": "Informazioni",
     "gtk.out": "output ({n} righe)",
+    "gtk.noBackend.title": "Backend non raggiungibile",
+    "gtk.noBackend.body":
+      "Nessuna risposta su {url}.\n\nIl client è solo una finestra: llama-server, i server audio.cpp e l'harness devono essere già avviati. Da terminale:\n\nbun run start",
+    "gtk.close": "Chiudi",
   },
   en: {
     "aec.on": "🔈 system AEC active (fd_ec_source/fd_ec_sink)",
@@ -29,6 +33,10 @@ const GTK_STRINGS: Record<Locale, Record<string, string>> = {
     "gtk.prefs": "Settings",
     "gtk.about.title": "About",
     "gtk.out": "output ({n} lines)",
+    "gtk.noBackend.title": "Backend unreachable",
+    "gtk.noBackend.body":
+      "Nothing is answering at {url}.\n\nThe client is only a window: llama-server, the audio.cpp servers and the harness must already be running. From a terminal:\n\nbun run start",
+    "gtk.close": "Close",
   },
 };
 

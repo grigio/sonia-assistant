@@ -25,6 +25,7 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { SoniaApp } from "./app";
+import { showBackendUnreachable } from "./backend-error";
 
 // Repo root — where a project .env would live. The packaged client (Arch
 // `sonia-gtk4`) runs from /usr/lib/sonia-gtk4, so it sets SONIA_GTK4_ROOT to
@@ -91,6 +92,13 @@ const harnessUrl = process.env.HARNESS_URL ?? "http://127.0.0.1:8095";
         `  bun run start        # llama-server + audio.cpp servers + harness, no Chromium\n` +
         `  bun run gtk4         # this app, in another terminal`,
     );
+    // A desktop launch has no terminal to read that in: say the same thing in a
+    // dialog and block until it is dismissed.
+    try {
+      await showBackendUnreachable({ url: harnessUrl, locale: resolveLocale() });
+    } catch (err) {
+      console.error("could not show the backend dialog:", err);
+    }
     process.exit(1);
   }
 }
