@@ -127,16 +127,19 @@ jobs:
       # shallow and only the tag refs are missing.
       - name: Build the release notes from the commit messages
         id: notes
+        working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
-          # Guard against the archive-download fallback above: without a real `.git` every
-          # `git` call below fails and the range silently degrades to "no previous tag".
-          # Fail the step instead, so a broken checkout is noticed rather than shipped as
-          # wrong release notes.
-          git rev-parse --git-dir >/dev/null 2>&1 || {
-            echo "::error::Not a git repository — actions/checkout fell back to an archive download (is git installed before checkout?)"
+          # Even though checkout created a real repository here, this container job has
+          # surprised us before about which working directory / PATH its `run` shells get.
+          # Pin both, then fail loudly if `.git` is still not usable — silently degrading
+          # to "no previous tag" is what produced the wrong v0.3.0 notes.
+          export PATH="/usr/bin:/usr/sbin:$PATH"
+          if ! git rev-parse --git-dir >/dev/null 2>&1; then
+            echo "::error::not usable as a git repository: pwd=$(pwd) git=$(command -v git || echo MISSING)"
+            ls -la | head -n 20
             exit 1
-          }
+          fi
           tag="${GITHUB_REF_NAME}"
 
           prev=""
