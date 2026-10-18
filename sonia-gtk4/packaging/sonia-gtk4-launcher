@@ -7,7 +7,7 @@
 # harness on :8095 must already be up (`bun run start` in the repo).
 set -euo pipefail
 
-PKG_DIR=/usr/lib/sonia-gtk4
+PKG_DIR=/usr/lib/sonia-gtk4/app
 
 load_env() {
   local f key

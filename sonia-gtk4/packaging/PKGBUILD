@@ -43,23 +43,34 @@ build() {
 
 package() {
   _pkgdir="$pkgdir/usr/lib/sonia-gtk4"
+  # The client lives one level down (app/) so its `../src/i18n` — the *shared* catalogue
+  # from the repo's src/, imported as a runtime value — resolves to
+  # /usr/lib/sonia-gtk4/src/i18n.ts *inside the package*. Shipping only sonia-gtk4/*.ts
+  # in a flat dir made `sonia-gtk4` die with "Cannot find module '../src/i18n'"
+  # (/usr/lib/sonia-gtk4/../src = /usr/lib/src).
+  _appdir="$_pkgdir/app"
   cd "$startdir/../.."
 
   install -Dm755 "$startdir/sonia-gtk4-launcher" "$pkgdir/usr/bin/sonia-gtk4"
 
-  install -d "$_pkgdir"
+  install -d "$_appdir"
   for f in sonia-gtk4/*.ts sonia-gtk4/package.json sonia-gtk4/bun.lock sonia-gtk4/tsconfig.json; do
-    install -Dm644 "$f" "$_pkgdir/$(basename "$f")"
+    install -Dm644 "$f" "$_appdir/$(basename "$f")"
   done
+
+  # the shared i18n catalogue the client pulls in as ../src/i18n
+  install -Dm644 src/i18n.ts "$_pkgdir/src/i18n.ts"
 
   # our own button glyphs — without these the send/sweep buttons quietly fall
-  # back to stock Adwaita icons (see applyIcon in app.ts)
-  install -d "$_pkgdir/icons"
+  # back to stock Adwaita icons (see applyIcon in app.ts, which reads ./icons
+  # next to itself)
+  install -d "$_appdir/icons"
   for f in sonia-gtk4/icons/*.svg; do
-    install -Dm644 "$f" "$_pkgdir/icons/$(basename "$f")"
+    install -Dm644 "$f" "$_appdir/icons/$(basename "$f")"
   done
 
-  # runtime deps of the app (jsGTK), minus dev cruft
+  # runtime deps of the app (jsGTK), minus dev cruft — one level above app/,
+  # where Bun's node resolution walks up to find them
   install -d "$_pkgdir/node_modules"
   cp -a sonia-gtk4/node_modules/. "$_pkgdir/node_modules/"
   rm -rf "$_pkgdir/node_modules/.cache"
