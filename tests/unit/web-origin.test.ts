@@ -11,7 +11,7 @@
  *   3. a name we could have served → loopback, `--host`, or an IP literal on a wildcard.
  */
 import { describe, expect, test } from "bun:test";
-import { originAllowed } from "../../src/web";
+import { originAllowed, urlHost } from "../../src/web";
 
 const HOST = "127.0.0.1:8095";
 
@@ -60,5 +60,15 @@ describe("originAllowed", () => {
     expect(originAllowed("http://192.168.1.89:8095", "192.168.1.89:8095", "192.168.1.88")).toBe(
       false,
     );
+  });
+});
+
+describe("urlHost", () => {
+  test("an IPv6 literal gets the brackets a URL needs; everything else is left as is", () => {
+    expect(urlHost("::1")).toBe("[::1]");
+    expect(urlHost("[::1]")).toBe("[::1]");
+    expect(urlHost("127.0.0.1")).toBe("127.0.0.1");
+    expect(urlHost("localhost")).toBe("localhost");
+    expect(urlHost("192.168.1.88")).toBe("192.168.1.88");
   });
 });

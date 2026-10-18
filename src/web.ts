@@ -568,7 +568,7 @@ export class WebApp {
     });
 
     const host = this.host === "0.0.0.0" || this.host === "" ? "127.0.0.1" : this.host;
-    const url = `http://${host}:${this.port}/`;
+    const url = `http://${urlHost(host)}:${this.port}/`;
     a.log(`✅ ready → ${url}`);
     if (openBrowser) launchChromium(url);
 
@@ -598,10 +598,23 @@ export class WebApp {
   }
 }
 
+/**
+ * A host as it must appear *inside a URL*: an IPv6 address needs its brackets, or
+ * `http://::1:8095/` is not a URL at all. `--host` may be written either way, so the
+ * brackets are added (or kept) as `net.isIP` requires. Used to build the launch URL the
+ * browser and the Chromium mic pregrant both start from.
+ */
+export function urlHost(host: string): string {
+  const bare = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+  return net.isIP(bare) === 6 ? `[${bare}]` : host;
+}
+
 /** Allow the mic for our origin in the dedicated app profile (no prompt, no warning bar). */
 export function pregrantMic(profile: string, url: string): void {
   const u = new URL(url);
-  const origin = `${u.protocol}//${u.hostname}:${u.port},*`;
+  // `u.host` keeps the port and the brackets an IPv6 literal needs; `u.hostname` would
+  // drop the port, and interpolating it unquoted would lose the brackets too
+  const origin = `${u.protocol}//${u.host},*`;
   const prefsPath = path.join(profile, "Default", "Preferences");
   fs.mkdirSync(path.dirname(prefsPath), { recursive: true });
   let prefs: Record<string, any> = {};

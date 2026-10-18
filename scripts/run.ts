@@ -105,7 +105,8 @@ const port = Number(flag("--port", "8095"));
 
 /** Attach the Chromium window to the harness already serving `url`, then idle. */
 async function reuseHarness(): Promise<never> {
-  const url = `http://${host}:${port}/`;
+  const hostForUrl = net.isIP(host) === 6 ? `[${host}]` : host;
+  const url = `http://${hostForUrl}:${port}/`;
   console.log(`\u267b\ufe0f  reusing the harness already on ${url} \u2014 opening Chromium only`);
   const { launchChromium } = await import("../src/web");
   launchChromium(url);
