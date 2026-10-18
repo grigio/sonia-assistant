@@ -153,7 +153,11 @@ rm -f "$tmp"
 say "desktop   $DESKTOP"
 
 # ── icon ──────────────────────────────────────────────────────────────────────
-SRC_ICON="$REPO/sonia.png"
+# icons/sonia-gtk4.{svg,png} is the real app icon; the repo-root sonia.png is the
+# README screenshot and only a last-resort fallback.
+SRC_ICON="$ICON_SRC_DIR/sonia-gtk4.png"
+[ -f "$SRC_ICON" ] || SRC_ICON="$ICON_SRC_DIR/sonia-gtk4.svg"
+[ -f "$SRC_ICON" ] || SRC_ICON="$REPO/sonia.png"
 if [ -f "$SRC_ICON" ]; then
   tmp="$(mktemp --suffix=.png)"
   if command -v magick >/dev/null 2>&1; then
@@ -167,7 +171,7 @@ if [ -f "$SRC_ICON" ]; then
   rm -f "$tmp"
   say "icon      $ICON"
 else
-  say "icon      skipped (no sonia.png in the repo root)"
+  say "icon      skipped (no icons/sonia-gtk4.{svg,png} nor sonia.png)"
 fi
 
 # ── our own glyphs (send arrow, sweep broom) ────────────────────────────────

@@ -17,6 +17,7 @@ const GTK_STRINGS: Record<Locale, Record<string, string>> = {
     "aec.speaker": "uscita: altoparlanti (nessun target AEC)",
     "gtk.mic.target": "sorgente: {name}",
     "gtk.prefs": "Impostazioni",
+    "gtk.about.title": "Informazioni",
     "gtk.out": "output ({n} righe)",
   },
   en: {
@@ -26,6 +27,7 @@ const GTK_STRINGS: Record<Locale, Record<string, string>> = {
     "aec.speaker": "output: speakers (no AEC target)",
     "gtk.mic.target": "source: {name}",
     "gtk.prefs": "Settings",
+    "gtk.about.title": "About",
     "gtk.out": "output ({n} lines)",
   },
 };

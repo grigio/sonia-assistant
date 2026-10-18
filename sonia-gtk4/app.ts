@@ -15,6 +15,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
+  AboutWindow,
   ColorScheme,
   ComboRow,
   HeaderBar,
@@ -84,6 +85,7 @@ export type AppOptions = {
   aecSource: string; // fd_ec_source when echo-cancel.sh is on
   aecSink: string; // fd_ec_sink
   aecDefault: boolean; // start with the system AEC engaged (when available)
+  version?: string; // app version for the about dialog (package.json)
 };
 
 /** One row of the chat list — the DOM-node role `static/index.html` keeps in `#log`. */
@@ -376,6 +378,8 @@ export class SoniaApp {
   private voiceBtn!: ToggleButton;
   private refreshBtn!: Button;
   private settingsBtn!: Button;
+  private aboutBtn!: Button;
+  private about!: AboutWindow;
   private taskBar!: Box;
   private chatScroll!: ScrolledWindow;
   private chatList!: ListBox;
@@ -544,6 +548,7 @@ export class SoniaApp {
     // on the parent instead of floating wherever it feels like (it used to open
     // off to the right, half off-screen on small desktops)
     this.prefs.setTransientFor(win);
+    this.about = this.buildAbout(win);
 
     win.onCloseRequest(() => {
       this.shutdown();
@@ -664,6 +669,22 @@ export class SoniaApp {
       }
     });
     bar.packEnd(this.settingsBtn);
+
+    // (i) — to the *right* of ⚙, so it is packed before it: packEnd lays the
+    // end box out in packing order, first packed ends up rightmost.
+    this.aboutBtn = new Button();
+    this.aboutBtn.setIconName("help-about-symbolic");
+    this.aboutBtn.setTooltipText(this.t("gtk.about.title"));
+    this.aboutBtn.setValign(Align.CENTER);
+    this.aboutBtn.onClick(() => {
+      // a second click closes it again, like the ⚙ drawer
+      if (this.about.getVisible()) {
+        this.about.setVisible(false);
+      } else {
+        this.about.present();
+      }
+    });
+    bar.packEnd(this.aboutBtn);
 
     this.refreshBtn = new Button();
     this.refreshBtn.setIconName("view-refresh-symbolic");
@@ -810,6 +831,27 @@ export class SoniaApp {
     foot.append(resetBtn);
 
     return foot;
+  }
+
+  /**
+   * About window: the client version from package.json (passed by main.ts) and the
+   * icon by *name* so the theme renders it.
+   *
+   * `AdwAboutWindow`, not `AdwAboutDialog`: the dialog is an AdwDialog with no
+   * transient-for, so labwc parked it wherever it liked and it could end up behind
+   * the main window. A window can be transient-for, so it is a child of the app
+   * window: always on top of it, centred on it, and it hides with it.
+   */
+  private buildAbout(parent: ApplicationWindow): AboutWindow {
+    const win = new AboutWindow();
+    win.setApplicationName("Sonia");
+    win.setDeveloperName("Sonia assistant");
+    win.setVersion(this.opts.version ?? "?");
+    win.setWebsite(ABOUT_WEBSITE);
+    win.setApplicationIcon(APP_ICON_NAME);
+    win.setTransientFor(parent);
+    win.setModal(true); // it is modal: the main window is blocked while it is open
+    return win;
   }
 
   private buildPrefs(): PreferencesWindow {
@@ -2132,6 +2174,13 @@ export class SoniaApp {
     if (this.bannerTimer) clearInterval(this.bannerTimer);
     this.mic.stop();
     this.speaker.close();
+    // the about window is transient-for the main one, but the WM is not obliged
+    // to close it for us: without this it survives as a stray window
+    try {
+      if (this.about) this.about.close();
+    } catch {
+      /* ignore */
+    }
     try {
       this.ws?.close();
     } catch {
@@ -2179,6 +2228,9 @@ const ICON_DIR = path.join(import.meta.dir, "icons");
  * up as the generic blank block in the task switcher and Alt-Tab.
  */
 const APP_ICON_NAME = "sonia-gtk4";
+
+/** The `Website` row of the about window. */
+const ABOUT_WEBSITE = "https://github.com/grigio/sonia-assistant";
 
 /** Best effort: a missing icon must never keep the window from opening. */
 export function applyWindowIcon(win: ApplicationWindow): boolean {

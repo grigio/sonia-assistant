@@ -78,14 +78,18 @@ package() {
   install -Dm644 "$startdir/sonia-gtk4.desktop" \
     "$pkgdir/usr/share/applications/sonia-gtk4.desktop"
 
-  # icon: 256x256 if ImageMagick is around, otherwise the original
+  # icon: icons/sonia-gtk4.{png,svg} is the app icon (sonia.png in the repo root
+  # is just the README screenshot); 256x256 if ImageMagick is around, else the source
+  icon_src="sonia-gtk4/icons/sonia-gtk4.png"
+  [ -f "$icon_src" ] || icon_src="sonia-gtk4/icons/sonia-gtk4.svg"
+  [ -f "$icon_src" ] || icon_src="sonia.png"
   icon_tmp="$(mktemp --suffix=.png)"
   if command -v magick >/dev/null 2>&1; then
-    magick sonia.png -resize 256x256 -background none -gravity center -extent 256x256 "$icon_tmp"
+    magick "$icon_src" -resize 256x256 -background none -gravity center -extent 256x256 "$icon_tmp"
   elif command -v convert >/dev/null 2>&1; then
-    convert sonia.png -resize 256x256 -background none -gravity center -extent 256x256 "$icon_tmp"
+    convert "$icon_src" -resize 256x256 -background none -gravity center -extent 256x256 "$icon_tmp"
   else
-    cp sonia.png "$icon_tmp"
+    cp "$icon_src" "$icon_tmp"
   fi
   install -Dm644 "$icon_tmp" "$pkgdir/usr/share/icons/hicolor/256x256/apps/sonia-gtk4.png"
   rm -f "$icon_tmp"

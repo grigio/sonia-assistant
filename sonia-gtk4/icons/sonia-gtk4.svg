@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Sonia GTK4 — app icon: a red disc inside a white ring, inside a green ring.
+     Loaded by *name* (sonia-gtk4) from the icon theme, so it is NOT a symbolic
+     icon: the colours are the icon, not a preview of it. Padding keeps the green
+     ring off the tile edge, so the mark still reads at 16px. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- outer green ring -->
+  <circle cx="128" cy="128" r="112" fill="#1fa84a"/>
+  <!-- white ring -->
+  <circle cx="128" cy="128" r="92" fill="#f5f6f8"/>
+  <!-- red disc -->
+  <circle cx="128" cy="128" r="70" fill="#d93a2b"/>
+</svg>

@@ -95,6 +95,16 @@ const harnessUrl = process.env.HARNESS_URL ?? "http://127.0.0.1:8095";
   }
 }
 
+/** App version from package.json — shown in the about dialog. */
+export function appVersion(): string {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(import.meta.dir, "package.json"), "utf-8"))
+      .version;
+  } catch {
+    return "?";
+  }
+}
+
 const aecPresent = ecNodesPresent();
 const app = new SoniaApp({
   wsUrl: wsUrlFrom(harnessUrl),
@@ -104,6 +114,7 @@ const app = new SoniaApp({
   aecSource: aecPresent ? "fd_ec_source" : "",
   aecSink: aecPresent ? "fd_ec_sink" : "",
   aecDefault: process.env.SONIA_AEC !== "0" && aecPresent,
+  version: appVersion(),
 });
 
 await app.run();
