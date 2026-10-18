@@ -96,18 +96,21 @@ jobs:
     container:
       image: archlinux:base-devel
     steps:
+      # git has to exist *before* checkout. The base-devel image ships without it, and
+      # `actions/checkout` silently falls back to a GitHub REST archive download when it
+      # cannot find git — a checkout with the source files but no `.git`. That still builds
+      # the package, but the release-notes step then has no repository to log/describe and
+      # announces every release as an "Initial release". Installing git first (the only
+      # tool checkout needs; the rest are for makepkg) keeps the checkout a real repo.
+      - name: Install the tools the steps below need
+        run: pacman -Syu --noconfirm --needed git make patch unzip
+
       # full history + tags: the release notes are generated from the commits between
       # this tag and the previous one
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           fetch-tags: true
-
-      # git first: the release-notes step below shells out to it, and the base-devel
-      # image ships without it (that is why the notes came out empty — every `git`
-      # call failed with "git: command not found").
-      - name: Install the tools the steps below need
-        run: pacman -Syu --noconfirm --needed git make patch unzip
 
       # Release notes = every commit in this tag's range, grouped by conventional-commit
       # type, with the breaking changes called out first. Falls back to a flat list.
@@ -126,6 +129,14 @@ jobs:
         id: notes
         run: |
           set -euo pipefail
+          # Guard against the archive-download fallback above: without a real `.git` every
+          # `git` call below fails and the range silently degrades to "no previous tag".
+          # Fail the step instead, so a broken checkout is noticed rather than shipped as
+          # wrong release notes.
+          git rev-parse --git-dir >/dev/null 2>&1 || {
+            echo "::error::Not a git repository — actions/checkout fell back to an archive download (is git installed before checkout?)"
+            exit 1
+          }
           tag="${GITHUB_REF_NAME}"
 
           prev=""
