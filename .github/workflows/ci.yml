@@ -105,17 +105,34 @@ jobs:
 
       # Release notes = every commit in this tag's range, grouped by conventional-commit
       # type, with the breaking changes called out first. Falls back to a flat list.
-      # actions/checkout with `fetch-tags: true` still leaves this container job with
-      # only the *triggering* tag, so `git describe` on `<tag>^` finds no previous tag
-      # and every release is announced as an "Initial release". Fetch the tags here, in
-      # the step that needs them, rather than trusting the checkout input.
+      #
+      # Finding the *previous* tag takes two tries. `git describe` is the accurate
+      # one (it only matches tags reachable from `<tag>^`), but it needs two things
+      # a checkout does not promise: the *objects* behind the tag names, and the
+      # parent of the tagging commit. On a shallow fetch `<tag>^` does not even
+      # resolve ("Not a valid object name"), so describe answers nothing and the
+      # release is announced as an "Initial release" — that is what happened on
+      # v0.2.6, even with `fetch-depth: 0` and `fetch-tags: true` in the checkout.
+      # So: try, deepen, try again. `--unshallow` pulls the missing history (what
+      # actually fixes `<tag>^`); the plain fetch is the no-op when it is not
+      # shallow and only the tag refs are missing.
       - name: Build the release notes from the commit messages
         id: notes
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
-          git fetch --tags --force --quiet origin 2>/dev/null || true
-          prev="$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)"
+
+          prev=""
+          for _ in 1 2; do
+            prev="$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)"
+            [ -n "$prev" ] && break
+            if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+              git fetch --quiet --unshallow --tags --force origin 2>/dev/null || true
+            else
+              git fetch --quiet --tags --force origin 2>/dev/null || true
+            fi
+          done
+
           if [ -n "$prev" ]; then
             range="${prev}..${tag}"
             echo "Release notes: commits in ${range}"
