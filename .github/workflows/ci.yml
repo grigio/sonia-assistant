@@ -21,7 +21,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version-file: .tool-versions
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -66,7 +66,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version-file: .tool-versions
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -195,9 +195,12 @@ jobs:
           cat release-notes.md
           echo "---------------------"
 
-      # bun lands in /usr/local so the non-root `builder` user running makepkg can see it too
+      # the pinned Bun, from the same `.tool-versions` CI uses (BUN_VERSION is honoured
+      # by the installer script), so the package builds with the runtime the suites ran on
       - name: Install bun (the runtime, and what the client sources run under)
-        run: curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash
+        run: |
+          export BUN_VERSION="$(awk '/^bun /{print $2}' .tool-versions)"
+          curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash
 
       # makepkg refuses to run as root, and container jobs run as root: build as `builder`.
       # The checkout is owned by root, so hand it over too (git needs safe.directory as well).

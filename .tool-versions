@@ -1,0 +1,3 @@
+# Local tooling (mise/asdf) and CI (`setup-bun`'s bun-version-file) read this one line,
+# so the runtime the suites run on is single-sourced and pinned, not "latest".
+bun 1.4.3
