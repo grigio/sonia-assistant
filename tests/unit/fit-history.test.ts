@@ -131,4 +131,19 @@ describe("fitHistory", () => {
     expect(a.history).toHaveLength(7); // 5 + the question just asked + its answer
     expect(a.history.some((m) => m.content === "turno 0")).toBe(true);
   });
+
+  test("the invariant: after a turn the history is inside its budget again", async () => {
+    const a = scripted();
+    a.contextTotal = 8192; // budget ≈ (8192 - 4000) × 3 = 12576 chars
+    const budget = historyBudget(8192);
+    const chars = () => (a as unknown as { historyChars(): number }).historyChars();
+
+    for (let i = 0; i < 30; i++) {
+      await turn(a, `domanda ${i} ${"z".repeat(2000)}`);
+      // the budget survives the turn, plus the answer appended after `fitHistory` ran
+      expect(chars()).toBeLessThanOrEqual(budget + 300);
+    }
+    // and it really was trimming each turn, not merely staying small on its own
+    expect(a.history.length).toBeLessThan(30);
+  });
 });
