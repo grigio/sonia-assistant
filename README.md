@@ -167,7 +167,8 @@ bun run scripts/stop.ts    # only the harness + its Chromium window
 then the harness — which warms up (LLM + TTS rate + ASR Vulkan graph) before printing
 `ready`, so a cold model load can take minutes. Everything private or regeneratable
 lives in `data/` (git-ignored): pid files, server configs, logs, the browser profile,
-notes/skills/voice choices and the conversation (`chat.json`).
+notes/skills/voice choices, the settings drawer's runtime switches (`settings.json`) and
+the conversation (`chat.json`).
 
 ### Barge-in on speakers
 
@@ -197,6 +198,7 @@ bun run status            # what is running + are llama-server/ASR/TTS/turn/harn
 bun run status --ui       # …+ the browser-UI suite (headless Chromium)
 bun run runtime-check     # the endpoint probe alone (the second half of `status`)
 scripts/ui-test.sh        # the browser-UI suite alone (the `--ui` part)
+bun run release 0.3.0     # bump package.json ×2 + PKGBUILD together (see CONTRIBUTING.md)
 ```
 
 CI (`.github/workflows/ci.yml`) is hermetic: llama-server and the audio.cpp servers are
@@ -255,7 +257,7 @@ CUDA/Nvidia hardware and more resources.
 
 Released under the **[GNU General Public License v3.0](LICENSE)** (`GPL-3.0-only`).
 
-Copyright (C) 2025 the fullduplex-assistant authors. You may redistribute it and/or
+Copyright (C) 2025 the sonia-assistant authors. You may redistribute it and/or
 modify it under the terms of the GPLv3 as published by the Free Software Foundation.
 
 ### Third-party components are **not** covered by this license

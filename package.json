@@ -1,5 +1,5 @@
 {
-  "name": "fullduplex-assistant",
+  "name": "sonia-assistant",
   "version": "0.2.7",
   "license": "GPL-3.0-only",
   "type": "module",
@@ -24,7 +24,8 @@
     "format": "biome format . --write",
     "pretest": "bun run typecheck",
     "test": "bun test tests/unit",
-    "test:all": "bun test"
+    "test:all": "bun test",
+    "release": "bun run scripts/release.ts"
   },
   "dependencies": {
     "onnxruntime-node": "~1.30.0",
