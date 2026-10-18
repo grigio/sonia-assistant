@@ -105,11 +105,16 @@ jobs:
 
       # Release notes = every commit in this tag's range, grouped by conventional-commit
       # type, with the breaking changes called out first. Falls back to a flat list.
+      # actions/checkout with `fetch-tags: true` still leaves this container job with
+      # only the *triggering* tag, so `git describe` on `<tag>^` finds no previous tag
+      # and every release is announced as an "Initial release". Fetch the tags here, in
+      # the step that needs them, rather than trusting the checkout input.
       - name: Build the release notes from the commit messages
         id: notes
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
+          git fetch --tags --force --quiet origin 2>/dev/null || true
           prev="$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)"
           if [ -n "$prev" ]; then
             range="${prev}..${tag}"
