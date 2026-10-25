@@ -14,6 +14,7 @@
  *   SPK_TARGET    playback device       (e.g. fd_ec_sink)
  *   SONIA_AEC     1 | 0                 (start with the system AEC engaged, default 1
  *                                        when the fd_ec nodes exist)
+ *   SONIA_MIC_VOLUME_FIX  0             (don't raise a hardware mic found below 55 %)
  *
  *   bun run start                (other terminal: all the backends, no Chromium)
  *   bun run gtk4                (from the repo root — same as `bun run sonia-gtk4`)
@@ -25,6 +26,7 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { SoniaApp } from "./app";
+import { fixLowCaptureVolume } from "./audio";
 import { showBackendUnreachable } from "./backend-error";
 
 // Repo root — where a project .env would live. The packaged client (Arch
@@ -113,6 +115,10 @@ export function appVersion(): string {
 }
 
 const aecPresent = ecNodesPresent();
+// A capture volume low enough to be inaudible is a *silent* failure (see audio.ts):
+// the level dot still moves, no word ever reaches the harness. Fix it before the
+// window opens, and say so in the chat — the user cannot see a pactl call.
+const volumeFixes = fixLowCaptureVolume();
 const app = new SoniaApp({
   wsUrl: wsUrlFrom(harnessUrl),
   locale: resolveLocale(),
@@ -121,6 +127,7 @@ const app = new SoniaApp({
   aecSource: aecPresent ? "fd_ec_source" : "",
   aecSink: aecPresent ? "fd_ec_sink" : "",
   aecDefault: process.env.SONIA_AEC !== "0" && aecPresent,
+  volumeFixes,
   version: appVersion(),
 });
 

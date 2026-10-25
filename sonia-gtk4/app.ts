@@ -46,6 +46,7 @@ import {
   ListBoxRow,
   MenuButton,
   Orientation,
+  Overlay,
   PolicyType,
   Popover,
   ProgressBar,
@@ -58,8 +59,20 @@ import {
   ToggleButton,
   type Widget,
 } from "@sigmasd/gtk/gtk4";
-import { Mic, type MicFrame, Speaker } from "./audio";
 import {
+  type CaptureSource,
+  gateRatio,
+  hardwareCaptureSources,
+  hpfHz,
+  MIN_MIC_VOLUME,
+  Mic,
+  Speaker,
+  setSourceMute,
+  setSourceVolume,
+  TARGET_MIC_VOLUME,
+} from "./audio";
+import {
+  applicationIsRegistered,
   onGtkIdle,
   onGtkIdleOnce,
   parentOf,
@@ -67,6 +80,7 @@ import {
   setWindowIcon,
   themeRgba,
   vadjustmentOf,
+  widgetWidth,
 } from "./gtk-raw";
 import { type I18n, makeI18n } from "./i18n";
 import type {
@@ -87,6 +101,8 @@ export type AppOptions = {
   aecSource: string; // fd_ec_source when echo-cancel.sh is on
   aecSink: string; // fd_ec_sink
   aecDefault: boolean; // start with the system AEC engaged (when available)
+  /** Hardware mics whose volume was raised at startup (see audio.ts). */
+  volumeFixes?: { name: string; description: string; from: number; to: number }[];
   version?: string; // app version for the about dialog (package.json)
 };
 
@@ -152,6 +168,28 @@ type TaskChip = {
 const ORB_D = 14;
 const MIC_D = 13;
 const DOT_BOX = 30;
+
+/**
+ * The audio calibration overlay's live traces: one sample per 32 ms capture frame,
+ * so 170 of them are ≈5.4 s — long enough to show a whole sentence and the silence
+ * after it, short enough to react while you speak.
+ */
+const DBG_HIST = 170;
+/** Meters are drawn on a dBFS scale: -70 (a silent room) to 0 (full scale). */
+const DBG_DB_MIN = -70;
+const DBG_DB_MAX = 0;
+/** Where the overlay's "lower it" action puts a capture source that clips. */
+const DBG_CLIP_VOLUME = 70;
+
+/** A one-click remedy attached to the overlay's primary diagnosis. */
+type DbgFix = { label: string; run: () => void };
+type DbgDiag = {
+  kind: "ok" | "warn" | "err" | "off";
+  text: string;
+  fix?: DbgFix;
+  /** Further problems beyond the primary one (shown only as a count). */
+  more?: number;
+};
 
 /**
  * The two level circles are painted in cairo, where no CSS reaches — so their
@@ -359,6 +397,35 @@ const CSS = `
     outline: 2px solid @accent_color; outline-offset: -2px; }
   .rew:focus, .btn-flat:focus { outline-offset: 1px; }
 
+  /* ── audio calibration overlay ───────────────────────────────────────── */
+  /* A scrim over the chat, under the header: the header keeps working, so the
+     same button that opens it can close it while you watch the levels. */
+  .dbg-scrim { background: alpha(black, 0.55); }
+  .dbg-card  { background: @window_bg_color; color: @theme_fg_color;
+               border: 1px solid alpha(@theme_fg_color, 0.18);
+               border-radius: 12px; padding: 8px 10px; }
+  .dbg-title { font-weight: bold; font-size: 1.05em; }
+  .dbg-card button { min-width: 26px; min-height: 26px; padding: 0; margin: 0;
+                     border-radius: 6px; }
+  .dbg-card button.dbg-fix { padding: 2px 10px; min-width: 0; font-size: 0.88em;
+                             font-weight: bold; }
+  .dbg-sec { background: alpha(@theme_fg_color, 0.04);
+             border: 1px solid alpha(@theme_fg_color, 0.10);
+             border-radius: 9px; padding: 5px 7px; }
+  .dbg-sec-title { font-weight: bold; font-size: 0.96em; }
+  .dbg-num { font-family: monospace; font-size: 0.9em; }
+  .dbg-chip { font-size: 0.82em; font-weight: bold; border-radius: 999px;
+              padding: 0 7px; border: 1px solid alpha(@theme_fg_color, 0.2);
+              color: @theme_fg_dim_color; }
+  .dbg-chip.dbg-ok   { color: @success_color; border-color: alpha(@success_color, 0.6); }
+  .dbg-chip.dbg-warn { color: @warning_color; border-color: alpha(@warning_color, 0.6); }
+  .dbg-chip.dbg-err  { color: @error_color;   border-color: alpha(@error_color, 0.6); }
+  .dbg-verdict { font-size: 0.9em; }
+  .dbg-verdict.dbg-ok   { color: @success_color; }
+  .dbg-verdict.dbg-warn { color: @warning_color; }
+  .dbg-verdict.dbg-err  { color: @error_color; }
+  .dbg-verdict.dbg-off  { color: @theme_fg_dim_color; }
+
   /* ── accents kept as classes for the TypeScript side ─────────────────── */
   .accent { color: @accent_color; }
   .off { color: @warning_color; }
@@ -371,6 +438,10 @@ export class SoniaApp {
 
   // ── window & widgets ──
   private win!: ApplicationWindow;
+  /** set by the first activate: a second activate must present, not rebuild */
+  private built = false;
+  /** last laid-out window width, so a resize is noticed without a signal */
+  private widthPx = 0;
   private orb!: DrawingArea;
   private stateLabel!: Label;
   private piBadge!: Label;
@@ -386,6 +457,24 @@ export class SoniaApp {
   private settingsBtn!: Button;
   private aboutBtn!: Button;
   private about!: AboutWindow;
+  private dbgBtn!: ToggleButton;
+  private dbgPanel!: Widget;
+  private dbgOpen = false;
+  private dbgMicPlot!: DrawingArea;
+  private dbgSilPlot!: DrawingArea;
+  private dbgSpkPlot!: DrawingArea;
+  private dbgMicNum!: Label;
+  private dbgMicInfo!: Label;
+  private dbgMicChip!: Label;
+  private dbgSilNum!: Label;
+  private dbgSilInfo!: Label;
+  private dbgSilChip!: Label;
+  private dbgSpkNum!: Label;
+  private dbgSpkInfo!: Label;
+  private dbgSpkChip!: Label;
+  private dbgVerdict!: Label;
+  private dbgFixBtn!: Button;
+  private dbgFix: { label: string; run: () => void } | null = null;
   private taskBar!: Box;
   private chatScroll!: ScrolledWindow;
   private chatList!: ListBox;
@@ -457,6 +546,27 @@ export class SoniaApp {
   private themeAge = 0; // ticks since the cache was last dropped (~1s)
   private state: StateName | "connecting" = "connecting";
 
+  // ── audio calibration overlay ──
+  //
+  // Everything here is measured on the *raw* capture, before anything the client
+  // might do to it: the overlay is a diagnostic, not part of the audio path. The
+  // room floor is a percentile, not NoiseGate.level: on an all-zero frame the gate's
+  // judge drops to ~0 and stays there, which would make every later frame "voice".
+  // `updateDbg` still notices when the client's own gate is inert (see there).
+  private dbgMicHist: number[] = [];
+  private dbgSpkHist: number[] = [];
+  /** Parallel to `dbgMicHist`: 1 = an all-zero frame, 1 = a clipped frame. */
+  private dbgZeroHist: number[] = [];
+  private dbgClipHist: number[] = [];
+  private dbgMicRms = 0;
+  private dbgMicPeak = 0;
+  private dbgSpkRms = 0;
+  private dbgSpkPeak = 0;
+  private dbgLastFrame = 0;
+  private dbgSources: CaptureSource[] = [];
+  private dbgSourcesAt = 0;
+  private dbgTick = 0;
+
   constructor(private readonly opts: AppOptions) {
     this.i18n = makeI18n(opts.locale === "en" ? "en" : "it");
     this.mic = new Mic(opts.micTarget);
@@ -470,7 +580,21 @@ export class SoniaApp {
     );
     this.loop = new EventLoop({ pollInterval: 16 });
     this.aecOn = opts.aecDefault && opts.aecSource !== "";
-    this.app.onActivate(() => this.buildUI());
+    // `activate` fires once for our own window, but also every time another
+    // `sonia-gtk4` launch forwards its activation here (GApplication is
+    // single-instance). Building the UI once more would give this process a
+    // second window, a second WebSocket and a second pw-record — the harness
+    // only serves one client, so the new window would kick the old one
+    // ("Another window took control"). A repeated activation must only raise
+    // the window that already exists.
+    this.app.onActivate(() => {
+      if (this.built) {
+        this.win.present();
+        return;
+      }
+      this.built = true;
+      this.buildUI();
+    });
   }
 
   private t = (key: string): string => this.i18n.t(key);
@@ -485,6 +609,19 @@ export class SoniaApp {
     // in the poll loop forever: a hung terminal and no window. Detect the
     // remote case, hand the activation to the primary, and exit cleanly.
     this.app.register();
+    // register() can also fail outright — a wedged owner that stops answering
+    // D-Bus leaves getIsRemote() asserting (jsGTK called it before GIO set
+    // is_registered) and activate() doing nothing. Without this check that is
+    // an invisible, endless hang; say it out loud and exit non-zero.
+    if (!applicationIsRegistered(this.app)) {
+      console.error(
+        "sonia-gtk4: could not register with the session bus.\n" +
+          "Another instance may be wedged while holding it.sonia.Assistant:\n" +
+          "  pkill -f 'sonia-gtk4/main.ts'      # or the packaged /usr/bin/sonia-gtk4\n" +
+          "  SONIA_GTK4_APP_ID=it.sonia.Assistant.2 bun run gtk4   # open a second one",
+      );
+      process.exit(1);
+    }
     if (this.app.getIsRemote()) {
       this.app.activate();
       return;
@@ -519,11 +656,9 @@ export class SoniaApp {
     win.setDefaultSize(560, 620);
     // the 💭 block and the partial line size themselves in chars: on a narrow or
     // resized window a fixed 90-char label is wider than the window and pushes it
-    // wider, which is how the reasoning box used to resize the window. Recompute
-    // the budget from the real width whenever it changes.
-    const remeasure = () => this.applyWidthBudget();
-    win.connect("notify::default-width", remeasure);
-    win.connect("notify::width", remeasure);
+    // wider, which is how the reasoning box used to resize the window. GTK4 has
+    // no `width` property and no size-allocate signal, so the tick loop watches
+    // the real allocation (see tickLevels) and calls applyWidthBudget on change.
     this.widthChars = this.charsFor(0);
     applyWindowIcon(win);
 
@@ -531,12 +666,17 @@ export class SoniaApp {
     win.setChild(root);
 
     root.append(this.buildHeader());
+
+    // Everything under the header goes inside an overlay, so the calibration panel
+    // can cover the chat while the header (and its toggle) stays usable. The panel
+    // is built hidden; setDbgOpen only flips its visibility.
+    const content = new Box(Orientation.VERTICAL, 0);
     this.taskBar = new Box(Orientation.VERTICAL, 6);
     this.taskBar.setMarginStart(14);
     this.taskBar.setMarginEnd(14);
     this.taskBar.setMarginTop(6);
     this.taskBar.setVisible(false);
-    root.append(this.taskBar);
+    content.append(this.taskBar);
 
     // ── chat ──
     this.chatList = new ListBox();
@@ -548,7 +688,6 @@ export class SoniaApp {
     this.chatScroll.setMarginEnd(14);
     this.chatScroll.setChild(this.chatList);
     this.chatScroll.setVexpand(true);
-    root.append(this.chatScroll);
 
     this.partial = new Label("");
     this.partial.addCssClass("partial-line");
@@ -557,9 +696,33 @@ export class SoniaApp {
     this.partial.setMarginEnd(18);
     this.partial.setEllipsize(3); // PANGO_ELLIPSIZE_END
     this.partial.setProperty("max-width-chars", this.widthChars);
-    root.append(this.partial);
 
-    root.append(this.buildFooter());
+    // The calibration panel covers the conversation but *not* the footer: typing a
+    // sentence while watching the assistant's trace is how you test its voice, and a
+    // scrim that swallowed the entry would force you to close the overlay first.
+    const chatArea = new Box(Orientation.VERTICAL, 0);
+    chatArea.append(this.chatScroll);
+    chatArea.append(this.partial);
+    const overlay = new Overlay();
+    overlay.setChild(chatArea);
+    overlay.setVexpand(true);
+    overlay.addOverlay(this.buildDbgPanel());
+    content.append(overlay);
+
+    content.append(this.buildFooter());
+    root.append(content);
+
+    // Esc closes the calibration overlay. On the window, not the panel: a GtkBox is
+    // not focusable, so a controller there would only hear the keys the panel itself
+    // happened to grab. Return false when it is closed — the entry and the other
+    // windows keep their own Escape.
+    const esc = new EventControllerKey();
+    esc.onKeyPressed((keyval) => {
+      if (keyval !== 0xff1b || !this.dbgOpen) return false; // GDK_KEY_Escape
+      this.setDbgOpen(false);
+      return true;
+    });
+    win.addController(esc);
 
     this.prefs = this.buildPrefs();
     // make the drawer a child of the main window: the WM then places it centred
@@ -583,9 +746,18 @@ export class SoniaApp {
 
     // the mic's own signals, set once: a stream that ends without stop() is pw-record
     // dying (device gone, PipeWire restarted, bad --target) → say so, then come back.
-    // Audio frames arrive on a child-process stdout callback, never inside a GTK
-    // step — same hop into the main loop, coalesced (only the newest frame counts).
-    this.mic.onFrame = (f) => onGtkIdleOnce("mic", () => this.onMicFrame(f));
+    // Audio frames arrive on a child-process stdout callback, never inside a GTK step.
+    // The PCM goes out from *here*: onGtkIdleOnce coalesces, and the idle queue is
+    // saturated while the assistant speaks (every TTS chunk and text update hops
+    // through it), so whole 32 ms frames used to vanish exactly when the harness
+    // needs a continuous stream to confirm a barge-in. Only the level dot hops to GTK.
+    this.mic.onFrame = (f) => {
+      if (this.closed) return;
+      if (this.micOn && !this.takenOver) this.sendBinary(f.pcm);
+      // calibration stats are plain numbers (no widgets): safe on this callback
+      this.dbgMicSample(f.pcm, f.peak);
+      onGtkIdleOnce("mic", () => this.onMicPeak(f.peak));
+    };
     this.mic.onEnd = (err) => {
       this.addEvent(`🎤 ${err}`);
       setTimeout(() => {
@@ -594,6 +766,11 @@ export class SoniaApp {
     };
 
     this.applyAudioTargets(false);
+    // a capture volume the client had to repair is not something the user can see
+    // happening (it is one pactl call in the preflight): leave a line in the chat
+    for (const f of this.opts.volumeFixes ?? []) {
+      this.addEvent(`🎤 ${f.description}: input volume ${f.from}% → ${f.to}%`);
+    }
     this.win.present();
     this.setState("connecting");
     this.connect();
@@ -687,6 +864,16 @@ export class SoniaApp {
       }
     });
     bar.packEnd(this.settingsBtn);
+
+    // Audio calibration: packed right after ⚙, so packEnd's right-to-left order puts
+    // it immediately to the settings button's left. A toggle, like the footer's mic:
+    // pressed = the overlay is up, and pressing it again brings the chat back.
+    this.dbgBtn = new ToggleButton();
+    this.dbgBtn.setIconName("audio-headset-symbolic");
+    this.dbgBtn.setTooltipText(this.t("dbg.title"));
+    this.dbgBtn.setValign(Align.CENTER);
+    this.dbgBtn.onToggled(() => this.setDbgOpen(this.dbgBtn.getActive()));
+    bar.packEnd(this.dbgBtn);
 
     // (i) — to the *right* of ⚙, so it is packed before it: packEnd lays the
     // end box out in packing order, first packed ends up rightmost.
@@ -1023,7 +1210,596 @@ export class SoniaApp {
     return win;
   }
 
+  // ───────────────────────────── audio calibration overlay ──────────────────
+
   /**
+   * The calibration overlay (header 🎛): three live traces — your voice, the silence
+   * between words, Sonia's voice — plus the numbers a mis-calibrated chain gets wrong.
+   *
+   * It is a *diagnostic*, not part of the audio path: the microphone trace is measured
+   * on the raw capture before anything the client might do to it, and the speaker
+   * trace on the PCM the harness just sent. The one thing it can change is the
+   * hardware capture volume, and only when you press ↻ (it re-reads what PipeWire
+   * reports; it never sets it).
+   */
+  private buildDbgPanel(): Widget {
+    const scrim = new Box(Orientation.VERTICAL, 0);
+    scrim.addCssClass("dbg-scrim");
+    scrim.setHexpand(true);
+    scrim.setVexpand(true);
+    scrim.setVisible(false);
+
+    // on a short window the card must stay reachable: the scrim scrolls it
+    const scroll = new ScrolledWindow();
+    scroll.setPolicy(PolicyType.NEVER, PolicyType.AUTOMATIC);
+    scroll.setHexpand(true);
+    scroll.setVexpand(true);
+
+    const card = new Box(Orientation.VERTICAL, 6);
+    card.addCssClass("dbg-card");
+    card.setHalign(Align.CENTER);
+    card.setValign(Align.START);
+    card.setSizeRequest(440, -1);
+    card.setMarginTop(10);
+    card.setMarginBottom(10);
+    card.setMarginStart(10);
+    card.setMarginEnd(10);
+
+    const head = new Box(Orientation.HORIZONTAL, 6);
+    const title = new Label(`🎛 ${this.t("dbg.title")}`);
+    title.addCssClass("dbg-title");
+    title.setHalign(Align.START);
+    title.setHexpand(true);
+    head.append(title);
+    const refresh = new Button();
+    refresh.setIconName("view-refresh-symbolic");
+    refresh.setTooltipText(this.t("dbg.refresh"));
+    refresh.onClick(() => {
+      this.resetDbgStats();
+      this.dbgSourcesAt = 0; // force a pactl read now
+      this.updateDbg();
+      this.queueDbgDraw();
+    });
+    head.append(refresh);
+    const close = new Button();
+    close.setIconName("window-close-symbolic");
+    close.setTooltipText(this.t("dbg.close"));
+    close.onClick(() => this.setDbgOpen(false));
+    head.append(close);
+    card.append(head);
+
+    // The verdict sits right under the title: it is the one thing to act on. A fixed
+    // height (three lines) keeps the card from jumping as warnings come and go; the
+    // button beside it is the fix, so the user does not have to guess which slider.
+    const verdictRow = new Box(Orientation.HORIZONTAL, 8);
+    verdictRow.setSizeRequest(-1, 52);
+    this.dbgVerdict = new Label(this.t("dbg.ok"));
+    this.dbgVerdict.addCssClass("dbg-verdict");
+    this.dbgVerdict.setHalign(Align.START);
+    this.dbgVerdict.setValign(Align.CENTER);
+    this.dbgVerdict.setWrap(true);
+    this.dbgVerdict.setHexpand(true);
+    // Hard-limit to the reserved three lines: a long warning must not push the
+    // sections down, and with the fixed row height the card never jumps.
+    this.dbgVerdict.setEllipsize(3); // Pango.EllipsizeMode.END
+    this.dbgVerdict.setProperty("lines", 3);
+    // Same reason as the numbers: a wrap label asks for its whole sentence
+    // unwrapped, so a long warning (or the "all good" text) would widen the card
+    // and then the window, and come back a few px narrower on the next message.
+    // Capped, the verdict wraps to at most three lines inside the 440 px card and
+    // leaves room for the fix button on its right.
+    this.dbgVerdict.setProperty("max-width-chars", 34);
+    verdictRow.append(this.dbgVerdict);
+    this.dbgFixBtn = new Button();
+    this.dbgFixBtn.addCssClass("dbg-fix");
+    this.dbgFixBtn.setValign(Align.CENTER);
+    this.dbgFixBtn.setVisible(false);
+    this.dbgFixBtn.onClick(() => this.runDbgFix());
+    verdictRow.append(this.dbgFixBtn);
+    card.append(verdictRow);
+
+    const mic = this.dbgSection("dbg.sec.mic");
+    mic.plot.setDrawFunc((_a, cr, w, h) => this.drawDbgMic(cr, w, h));
+    this.dbgMicPlot = mic.plot;
+    this.dbgMicNum = mic.num;
+    this.dbgMicInfo = mic.info;
+    this.dbgMicChip = mic.chip;
+    card.append(mic.box);
+
+    const silence = this.dbgSection("dbg.sec.silence");
+    silence.plot.setDrawFunc((_a, cr, w, h) => this.drawDbgSilence(cr, w, h));
+    this.dbgSilPlot = silence.plot;
+    this.dbgSilNum = silence.num;
+    // "rumore −100 dBFS · soglia −100 dBFS · 100% sopra": one line, widest case
+    this.dbgSilNum.setProperty("width-chars", 50);
+    this.dbgSilInfo = silence.info;
+    this.dbgSilChip = silence.chip;
+    card.append(silence.box);
+
+    const voice = this.dbgSection("dbg.sec.voice");
+    voice.plot.setDrawFunc((_a, cr, w, h) => this.drawDbgVoice(cr, w, h));
+    this.dbgSpkPlot = voice.plot;
+    this.dbgSpkNum = voice.num;
+    this.dbgSpkInfo = voice.info;
+    this.dbgSpkChip = voice.chip;
+    card.append(voice.box);
+
+    scroll.setChild(card);
+    scrim.append(scroll);
+    this.dbgPanel = scrim;
+    return scrim;
+  }
+
+  /** Title + status chip + trace + numbers + detail line: one block of the overlay. */
+  private dbgSection(titleKey: string): {
+    box: Box;
+    plot: DrawingArea;
+    num: Label;
+    info: Label;
+    chip: Label;
+  } {
+    const box = new Box(Orientation.VERTICAL, 4);
+    box.addCssClass("dbg-sec");
+    const head = new Box(Orientation.HORIZONTAL, 6);
+    const title = new Label(this.t(titleKey));
+    title.addCssClass("dbg-sec-title");
+    title.setHalign(Align.START);
+    title.setHexpand(true);
+    const chip = new Label("");
+    chip.addCssClass("dbg-chip");
+    head.append(title);
+    head.append(chip);
+    box.append(head);
+    const plot = new DrawingArea();
+    plot.setContentHeight(40);
+    plot.setHexpand(true);
+    box.append(plot);
+    const num = new Label("");
+    num.addCssClass("dbg-num");
+    num.setHalign(Align.START);
+    // A monospace field of fixed width: these readings change ~10×/s, and a label
+    // whose natural width followed its digits (rms −9 → rms −100) would resize the
+    // card — and with it the window, because a GtkOverlay's minimum is the max of
+    // its children. The widths below are "longest text this line can ever hold";
+    // shorter values keep the same footprint.
+    num.setProperty("width-chars", 31);
+    num.setXalign(0); // keep the reading left-aligned inside the reserved field
+    box.append(num);
+    const info = new Label("");
+    info.addCssClass("dim");
+    info.setHalign(Align.START);
+    info.setWrap(true);
+    // a wrapping label still asks for its *unwrapped* width unless capped, and the
+    // source names (alsa_input.pci-0000_00_1f.3-…) are far wider than the card
+    info.setProperty("max-width-chars", 48);
+    box.append(info);
+    return { box, plot, num, info, chip };
+  }
+
+  /** Open/close the overlay; the header toggle and the ✕ both come through here. */
+  private setDbgOpen(open: boolean): void {
+    this.dbgOpen = open;
+    // setActive fires toggled again: the guard makes the second pass a no-op
+    if (this.dbgBtn && this.dbgBtn.getActive() !== open) this.dbgBtn.setActive(open);
+    if (!this.dbgPanel) return;
+    this.dbgPanel.setVisible(open);
+    if (!open) return;
+    this.dbgSourcesAt = 0; // pactl read + first paint right away
+    this.updateDbg();
+    this.queueDbgDraw();
+  }
+
+  private queueDbgDraw(): void {
+    if (!this.dbgOpen || this.closed) return;
+    this.dbgMicPlot.queueDraw();
+    this.dbgSilPlot.queueDraw();
+    this.dbgSpkPlot.queueDraw();
+  }
+
+  /** Raw capture seen by the microphone, measured before the client touches it. */
+  private dbgMicSample(pcm: Uint8Array, peak: number): void {
+    const { rms } = trueLevels(pcm);
+    if (peak === 0)
+      this.dbgZeroHist.push(1); // all samples exactly zero: closed/muted source
+    else this.dbgZeroHist.push(0);
+    this.dbgClipHist.push(peak >= 0.999 ? 1 : 0);
+    this.dbgMicRms = rms;
+    this.dbgMicPeak = Math.max(peak, this.dbgMicPeak * 0.94);
+    this.dbgLastFrame = Date.now();
+    this.dbgMicHist.push(rms);
+    if (this.dbgMicHist.length > DBG_HIST) this.dbgMicHist.shift();
+    if (this.dbgZeroHist.length > DBG_HIST) this.dbgZeroHist.shift();
+    if (this.dbgClipHist.length > DBG_HIST) this.dbgClipHist.shift();
+  }
+
+  /** PCM the harness sent for Sonia's voice, measured before playback. */
+  private dbgSpkSample(pcm: Uint8Array): void {
+    const { rms, peak } = trueLevels(pcm);
+    this.dbgSpkRms = Math.max(rms, this.dbgSpkRms);
+    this.dbgSpkPeak = Math.max(peak, this.dbgSpkPeak);
+  }
+
+  private resetDbgStats(): void {
+    this.dbgMicHist = [];
+    this.dbgZeroHist = [];
+    this.dbgClipHist = [];
+  }
+
+  /**
+   * The room floor: the 20th percentile of the window, digital-silence frames
+   * excluded. A percentile survives a door slam at the top and a zero frame at the
+   * bottom, which the gate's recursive floor does not (see the comment at the top).
+   */
+  private dbgNoiseFloor(): number {
+    const live = this.dbgMicHist.filter((v) => v > 0);
+    if (!live.length) return 1e-5; // -100 dBFS: nothing audible has arrived yet
+    return Math.max(1e-5, percentile(live, 0.2));
+  }
+
+  /** The level at which a frame counts as voice rather than room. */
+  private dbgGateThreshold(): number {
+    return Math.max(1e-5, this.dbgNoiseFloor() * gateRatio());
+  }
+
+  /**
+   * Numbers, chips and the diagnosis. Runs ~10×/s while the overlay is open: no
+   * widget work at all when it is not, so the capture path stays cheap.
+   */
+  private updateDbg(): void {
+    if (this.closed || !this.dbgPanel || !this.dbgOpen) return;
+    const now = Date.now();
+    // the hardware volume can be moved from anywhere; re-read it (pactl is a
+    // spawnSync: 10 ms every 5 s, and only while the panel is up)
+    if (now - this.dbgSourcesAt > 5000) {
+      this.dbgSourcesAt = now;
+      this.dbgSources = hardwareCaptureSources();
+    }
+    const frames = this.dbgMicHist.length;
+    const zeroPct = ratio(this.dbgZeroHist);
+    const clipPct = ratio(this.dbgClipHist);
+    const thr = this.dbgGateThreshold();
+    const useAec = this.aecOn && this.opts.aecSource !== "";
+
+    // ── your voice ──
+    this.dbgMicNum.setText(
+      this.tf("dbg.num.db", { rms: dbText(this.dbgMicRms), peak: dbText(this.dbgMicPeak) }),
+    );
+    let micInfo = this.tf("dbg.mic.src", {
+      name: useAec ? this.opts.aecSource : this.opts.micTarget || this.t("dbg.spk.default"),
+    });
+    // One compact volume readout instead of one entry per hardware source: the
+    // overlay already prints the active source, and two internal mics only add
+    // noise. The range is what matters — the lowest one is the one that closes.
+    const liveSources = this.dbgSources.filter((s) => !s.mute);
+    if (!this.dbgSources.length) {
+      micInfo += ` · ${this.t("dbg.mic.novol")}`;
+    } else {
+      if (liveSources.length) {
+        const lo = Math.min(...liveSources.map((s) => s.percent));
+        const hi = Math.max(...liveSources.map((s) => s.percent));
+        micInfo += ` · ${this.tf("dbg.mic.hw", { range: lo === hi ? `${lo}%` : `${lo}–${hi}%` })}`;
+      }
+      if (liveSources.length < this.dbgSources.length) {
+        micInfo += ` · ${this.t("dbg.chip.muted")}`;
+      }
+    }
+    micInfo += ` · ${useAec ? this.t("dbg.mic.aec.on") : this.t("dbg.mic.aec.off")}`;
+    this.dbgMicInfo.setText(micInfo);
+
+    if (!this.micOn) this.dbgChip(this.dbgMicChip, this.t("dbg.chip.off"), "off");
+    else if (frames === 0 || now - this.dbgLastFrame > 2500) {
+      this.dbgChip(this.dbgMicChip, this.t("dbg.chip.off"), "off");
+    } else if (zeroPct > 0.5) {
+      this.dbgChip(this.dbgMicChip, this.t("dbg.chip.zeros"), "warn");
+    } else if (clipPct > 0.1) {
+      this.dbgChip(this.dbgMicChip, this.t("dbg.chip.clip"), "warn");
+    } else if (this.dbgMicRms >= thr) {
+      this.dbgChip(this.dbgMicChip, this.t("dbg.chip.voice"), "ok");
+    } else {
+      this.dbgChip(this.dbgMicChip, this.t("dbg.chip.silence"), "");
+    }
+
+    // ── silence ──
+    const hp = hpfHz();
+    const floor = this.dbgNoiseFloor();
+    const abovePct = frames
+      ? Math.round((this.dbgMicHist.filter((v) => v >= thr).length / frames) * 100)
+      : 0;
+    this.dbgSilNum.setText(
+      this.tf("dbg.num.sil", { floor: dbText(floor), thr: dbText(thr), pct: abovePct }),
+    );
+    // The client's own NoiseGate counts frames only when something calls gated().
+    // A "not applied" here with frames flowing means the filter is configured but
+    // inert: exactly the sort of thing this overlay exists to make visible.
+    this.dbgSilInfo.setText(
+      this.tf("dbg.sil.info", {
+        ratio: gateRatio(),
+        hp: hp > 0 ? `${hp} Hz` : this.t("dbg.chip.off"),
+        state:
+          this.mic.gate.gateStats().seen > 0 ? this.t("dbg.sil.active") : this.t("dbg.sil.inert"),
+      }),
+    );
+    const loud = this.dbgMicRms >= thr;
+    this.dbgChip(
+      this.dbgSilChip,
+      this.t(loud ? "dbg.chip.voice" : "dbg.chip.silence"),
+      loud ? "ok" : "",
+    );
+
+    // ── Sonia's voice ──
+    this.dbgSpkNum.setText(
+      this.tf("dbg.num.db", { rms: dbText(this.dbgSpkRms), peak: dbText(this.dbgSpkPeak) }),
+    );
+    let spkInfo = this.tf("dbg.spk.info", {
+      rate: this.rate,
+      name: (useAec ? this.opts.aecSink : this.opts.spkTarget) || this.t("dbg.spk.default"),
+    });
+    if (!this.voiceOn) spkInfo += ` · ${this.t("dbg.spk.muted")}`;
+    this.dbgSpkInfo.setText(spkInfo);
+    const speaking = this.state === "speaking";
+    this.dbgChip(
+      this.dbgSpkChip,
+      this.t(speaking ? "dbg.chip.voice" : "dbg.chip.silence"),
+      speaking ? "ok" : "",
+    );
+
+    // ── verdict ──
+    this.setDbgVerdict(this.dbgDiagnosis(now));
+  }
+
+  private setDbgVerdict(d: DbgDiag): void {
+    this.dbgVerdict.setText(d.more ? `${d.text}\n${this.tf("dbg.more", { n: d.more })}` : d.text);
+    for (const k of ["ok", "warn", "err", "off"] as const) {
+      this.dbgVerdict.removeCssClass(`dbg-${k}`);
+    }
+    this.dbgVerdict.addCssClass(`dbg-${d.kind}`);
+    this.dbgFix = d.fix ?? null;
+    this.dbgFixBtn.setVisible(!!d.fix);
+    if (d.fix) this.dbgFixBtn.setLabel(d.fix.label);
+  }
+
+  /** The verdict's action button: apply the remedy, then re-read the source list. */
+  private runDbgFix(): void {
+    const fix = this.dbgFix;
+    if (!fix) return;
+    fix.run();
+    this.dbgSourcesAt = 0; // a volume/unmute change must show up immediately
+    this.updateDbg();
+    this.queueDbgDraw();
+  }
+
+  private dbgChip(label: Label, text: string, kind: "ok" | "warn" | "err" | "off" | ""): void {
+    label.setText(text);
+    for (const k of ["ok", "warn", "err"] as const) label.removeCssClass(`dbg-${k}`);
+    if (kind) label.addCssClass(`dbg-${kind}`);
+  }
+
+  /**
+   * The single most important problem, in plain words, with the one action that
+   * fixes it. The remaining problems are only counted: three stacked warnings with
+   * three different remedies is exactly the "what do I do now?" this overlay had.
+   * It reports only what the numbers support: digital zeros (a closed/muted source),
+   * clipping, a capture volume below the SOF mic's usable range, a floor high enough
+   * for the VAD, too little separation between voice and room, and the microphone
+   * hearing Sonia (which makes her interrupt herself).
+   */
+  private dbgDiagnosis(now: number): DbgDiag {
+    if (this.takenOver) return { kind: "off", text: this.t("msg.replaced") };
+    if (!this.micOn) {
+      return {
+        kind: "off",
+        text: this.t("dbg.w.micOff"),
+        fix: { label: this.t("dbg.fix.micOn"), run: () => this.micBtn.setActive(true) },
+      };
+    }
+
+    // all ratios are over the last DBG_HIST frames (≈5.4 s): a pop at startup
+    // must not keep accusing the microphone a minute later
+    const frames = this.dbgMicHist.length;
+    const asPct = (r: number): string => `${Math.round(r * 100)}%`;
+    const issues: { kind: "warn" | "err"; text: string; fix?: DbgFix }[] = [];
+    const add = (kind: "warn" | "err", text: string, fix?: DbgFix): void => {
+      if (!issues.some((i) => i.text === text)) issues.push({ kind, text, fix });
+    };
+
+    // ── microphone volume: the fixes touch every non-muted hardware source, so a
+    // second internal mic cannot keep the level down while the first one is fixed
+    const live = this.dbgSources.filter((s) => !s.mute);
+    const minVol = live.length ? Math.min(...live.map((s) => s.percent)) : null;
+    const muted = this.dbgSources.some((s) => s.mute);
+    const raise: DbgFix = {
+      label: this.tf("dbg.fix.raise", { pct: TARGET_MIC_VOLUME }),
+      run: () => {
+        for (const s of this.dbgSources) {
+          if (!s.mute && s.percent < TARGET_MIC_VOLUME) {
+            setSourceVolume(s.name, TARGET_MIC_VOLUME);
+          }
+        }
+      },
+    };
+    const lower: DbgFix = {
+      label: this.tf("dbg.fix.lower", { pct: DBG_CLIP_VOLUME }),
+      run: () => {
+        for (const s of this.dbgSources) {
+          if (!s.mute && s.percent > DBG_CLIP_VOLUME) {
+            setSourceVolume(s.name, DBG_CLIP_VOLUME);
+          }
+        }
+      },
+    };
+    const unmute: DbgFix = {
+      label: this.t("dbg.fix.unmute"),
+      run: () => {
+        for (const s of this.dbgSources) if (s.mute) setSourceMute(s.name, false);
+      },
+    };
+    const lowVolume = minVol !== null && minVol < MIN_MIC_VOLUME;
+
+    if (this.dbgLastFrame === 0 || now - this.dbgLastFrame > 2500) {
+      add("err", this.t("dbg.w.noFrames"), {
+        label: this.t("dbg.fix.restart"),
+        run: () => this.applyAudioTargets(false),
+      });
+    }
+    if (frames > 30) {
+      const zeroPct = ratio(this.dbgZeroHist);
+      if (zeroPct > 0.9) {
+        // at a sane volume, all-zero frames are a source problem, not a volume one
+        add("err", this.tf("dbg.w.zeros", { pct: asPct(zeroPct) }), lowVolume ? raise : undefined);
+      } else if (zeroPct > 0.3) {
+        add(
+          "warn",
+          this.tf("dbg.w.someZeros", { pct: asPct(zeroPct) }),
+          lowVolume ? raise : undefined,
+        );
+      }
+      if (ratio(this.dbgClipHist) > 0.1) {
+        add("warn", this.tf("dbg.w.clip", { pct: asPct(ratio(this.dbgClipHist)) }), lower);
+      }
+    }
+    if (muted) {
+      add("warn", this.t("dbg.w.mute"), unmute);
+    } else if (lowVolume && minVol !== null) {
+      add("warn", this.tf("dbg.w.volume", { pct: minVol, min: MIN_MIC_VOLUME }), raise);
+    }
+
+    const floor = this.dbgNoiseFloor();
+    const floorDb = dbOf(floor);
+    if (frames > 90 && floorDb > -40) {
+      add("warn", this.tf("dbg.w.floor", { db: dbText(floor) }));
+    }
+    // how much room the VAD has between the room and the voice: with less than
+    // ~15 dB, no threshold can separate them reliably
+    const voice = percentile(this.dbgMicHist, 0.95);
+    const sep = dbOf(voice) - floorDb;
+    if (frames > 90 && voice > floor * 2 && sep < 15) {
+      add("warn", this.tf("dbg.w.sep", { db: `${Math.round(sep)} dB` }));
+    }
+
+    // The microphone hearing Sonia while she speaks: echo, a deliberate barge-in, or
+    // — the case this warning exists for — Sonia interrupting herself. The remedy is
+    // the cheapest one that is still available: AEC if the nodes exist, half-duplex
+    // if not, barge-in off as the last resort.
+    if (
+      this.state === "speaking" &&
+      this.voiceOn &&
+      this.dbgSpkRms > 0.004 &&
+      this.dbgMicRms > this.dbgGateThreshold() * 1.5
+    ) {
+      let echoFix: DbgFix | undefined;
+      if (!this.aecOn && this.opts.aecSource !== "") {
+        echoFix = { label: this.t("dbg.fix.aec"), run: () => this.swAec.setActive(true) };
+      } else if (!this.swHalf.getActive()) {
+        echoFix = { label: this.t("dbg.fix.half"), run: () => this.swHalf.setActive(true) };
+      } else if (this.swBarge.getActive()) {
+        echoFix = { label: this.t("dbg.fix.barge"), run: () => this.swBarge.setActive(false) };
+      }
+      add("warn", this.tf("dbg.w.echo", { db: dbText(this.dbgMicRms) }), echoFix);
+    }
+    if (this.state === "speaking" && this.voiceOn && !this.speaker.running) {
+      add("warn", this.t("dbg.w.spk"));
+    }
+
+    if (!issues.length) {
+      if (!this.voiceOn) {
+        return {
+          kind: "off",
+          text: this.t("dbg.w.voiceOff"),
+          fix: { label: this.t("dbg.fix.voiceOn"), run: () => this.voiceBtn.setActive(true) },
+        };
+      }
+      return { kind: "ok", text: this.t("dbg.ok") };
+    }
+    const primary = issues[0]!;
+    return {
+      kind: issues.some((i) => i.kind === "err") ? "err" : "warn",
+      text: `${primary.kind === "err" ? "✖" : "⚠"} ${primary.text}`,
+      fix: primary.fix,
+      more: issues.length - 1,
+    };
+  }
+
+  /**
+   * Triangle of dBFS bars, one per 32 ms frame, newest on the right. A frame that
+   * clears `thr` is drawn in the signal's colour, the rest stay dim; the threshold
+   * itself is the dashed line. That single picture is the calibration: speech
+   * should tower over the line, a silent room should be a flat smudge under it.
+   */
+  private drawDbgBars(
+    cr: CairoContext,
+    w: number,
+    h: number,
+    hist: number[],
+    rgb: [number, number, number],
+    thr: number | null,
+  ): void {
+    const fg = this.themeColor("theme_fg_color") ?? OFFLINE_RGB;
+    cr.setSourceRgba(fg[0], fg[1], fg[2], 0.08);
+    cr.rectangle(0, 0, w, h);
+    cr.fill();
+    const slot = 3; // 2 px bar + 1 px gap
+    const max = Math.max(1, Math.floor(w / slot));
+    const from = Math.max(0, hist.length - max);
+    for (let i = from; i < hist.length; i++) {
+      const v = hist[i]!;
+      const lvl = dbLevel(v);
+      // digital silence paints nothing: a 1 px bar at every empty slot reads as a
+      // dashed baseline and hides that there is no signal at all
+      if (lvl <= 0) continue;
+      const bh = Math.max(1, Math.round(lvl * (h - 2)));
+      const x = w - (hist.length - i) * slot;
+      if (thr === null || v >= thr) cr.setSourceRgba(rgb[0], rgb[1], rgb[2], 0.92);
+      else cr.setSourceRgba(fg[0], fg[1], fg[2], 0.22);
+      cr.rectangle(x, h - bh, 2, bh);
+      cr.fill();
+    }
+    if (thr !== null) {
+      const y = Math.round(h - dbLevel(thr) * (h - 2)) - 0.5;
+      const warn = this.themeColor("warning_color") ?? OFFLINE_RGB;
+      cr.setSourceRgba(warn[0], warn[1], warn[2], 0.65);
+      for (let x = 0; x < w; x += 6) cr.rectangle(x, y, 3, 1);
+      cr.fill();
+    }
+  }
+
+  private drawDbgMic(cr: CairoContext, w: number, h: number): void {
+    const rgb = this.themeColor("success_color") ?? OFFLINE_RGB;
+    this.drawDbgBars(cr, w, h, this.dbgMicHist, rgb, this.dbgGateThreshold());
+  }
+
+  /**
+   * The silence timeline: one full-height tick per frame that cleared the threshold
+   * (voice), a baseline dash for the ones that did not. A room that keeps lighting
+   * this up while you are quiet is the whole "the assistant hears ghosts" bug.
+   */
+  private drawDbgSilence(cr: CairoContext, w: number, h: number): void {
+    const fg = this.themeColor("theme_fg_color") ?? OFFLINE_RGB;
+    const ok = this.themeColor("success_color") ?? OFFLINE_RGB;
+    cr.setSourceRgba(fg[0], fg[1], fg[2], 0.08);
+    cr.rectangle(0, 0, w, h);
+    cr.fill();
+    const thr = this.dbgGateThreshold();
+    const hist = this.dbgMicHist;
+    const slot = 3;
+    const max = Math.max(1, Math.floor(w / slot));
+    const from = Math.max(0, hist.length - max);
+    for (let i = from; i < hist.length; i++) {
+      const x = w - (hist.length - i) * slot;
+      if (hist[i]! >= thr) {
+        cr.setSourceRgba(ok[0], ok[1], ok[2], 0.85);
+        cr.rectangle(x, 2, 2, h - 4);
+      } else {
+        cr.setSourceRgba(fg[0], fg[1], fg[2], 0.2);
+        cr.rectangle(x, h - 5, 2, 3);
+      }
+      cr.fill();
+    }
+  }
+
+  private drawDbgVoice(cr: CairoContext, w: number, h: number): void {
+    const rgb = this.themeColor("accent_color") ?? OFFLINE_RGB;
+    this.drawDbgBars(cr, w, h, this.dbgSpkHist, rgb, null);
+  } /**
    * The two level circles, drawn with the web UI's formula so they look like the
    * same objects in the browser:
    *
@@ -1129,10 +1905,27 @@ export class SoniaApp {
       this.themeAge = 0;
       this.themeCache.clear();
     }
+    // a resize has no signal in GTK4: poll the real allocation, and only pay for
+    // the label re-clamp when it actually moved (a few px of jitter is noise)
+    const w = widgetWidth(this.win);
+    if (w > 100 && Math.abs(w - this.widthPx) >= 8) {
+      this.widthPx = w;
+      this.applyWidthBudget(w);
+    }
     // both dots are level-driven (mic down, voice up) and the header one also
     // follows the state colour, so redraw them on every tick
     this.micDot.queueDraw();
     this.orb.queueDraw();
+    // calibration traces: capture samples arrive on their own callback (one per
+    // 32 ms frame); the speaker is sampled here so both share a time axis
+    this.dbgSpkHist.push(this.voiceOn ? this.dbgSpkRms : 0);
+    if (this.dbgSpkHist.length > DBG_HIST) this.dbgSpkHist.shift();
+    this.dbgSpkRms *= 0.6;
+    this.dbgSpkPeak *= 0.9;
+    if (this.dbgOpen) {
+      this.queueDbgDraw();
+      if (++this.dbgTick % 3 === 0) this.updateDbg(); // numbers ~10×/s
+    }
   }
 
   // ───────────────────────────── chat rendering ─────────────────────────────
@@ -1381,9 +2174,9 @@ export class SoniaApp {
   }
 
   /** re-clamp every width-driven label after a window resize */
-  private applyWidthBudget(): void {
-    const w = Number(this.win.getProperty("width") ?? 0);
-    this.widthChars = this.charsFor(w);
+  private applyWidthBudget(width = widgetWidth(this.win)): void {
+    if (!this.partial) return; // called before the UI is complete
+    this.widthChars = this.charsFor(width);
     this.partial.setProperty("max-width-chars", this.widthChars);
     const tb = this.thinkBlock;
     if (tb) {
@@ -1962,16 +2755,20 @@ export class SoniaApp {
       this.mic.stop();
       this.mic.start();
     }
+    // a device switch resets the room floor and the counters: the old levels
+    // describe another source and would make the calibration lie
+    this.resetDbgStats();
+    this.dbgLastFrame = 0;
     this.speaker.ensure(this.rate, spkTarget);
     if (announce) {
       this.addEvent(this.t(useAec ? "aec.on" : this.opts.spkTarget ? "aec.speaker" : "aec.off"));
     }
   }
 
-  private onMicFrame(f: MicFrame): void {
+  /** Level dot only: the PCM itself already left from the capture callback. */
+  private onMicPeak(peak: number): void {
     if (this.closed) return; // one last frame can land after the window is gone
-    this.micPeak = this.micOn && !this.takenOver ? Math.min(1, f.peak * 1.4) : 0;
-    if (this.micOn && !this.takenOver) this.sendBinary(f.pcm);
+    this.micPeak = this.micOn && !this.takenOver ? Math.min(1, peak * 1.4) : 0;
   }
 
   // ───────────────────────────── websocket ─────────────────────────────
@@ -2035,13 +2832,12 @@ export class SoniaApp {
   private handleMessage(e: MessageEvent): void {
     if (typeof e.data !== "string") {
       // binary = TTS PCM at `rate`, already paced server-side
-      if (this.voiceOn) {
-        const bytes =
-          e.data instanceof ArrayBuffer
-            ? new Uint8Array(e.data)
-            : new Uint8Array(e.data as ArrayBuffer);
-        this.speaker.write(bytes);
-      }
+      const bytes =
+        e.data instanceof ArrayBuffer
+          ? new Uint8Array(e.data)
+          : new Uint8Array(e.data as ArrayBuffer);
+      this.dbgSpkSample(bytes); // measure even when muted: the trace is the input
+      if (this.voiceOn) this.speaker.write(bytes);
       return;
     }
     let ev: ServerEvent;
@@ -2330,6 +3126,60 @@ function applyIcon(btn: Button, name: string, fallbackIcon: string): void {
 function sel(l: Label): Label {
   l.setSelectable(true);
   return l;
+}
+
+/**
+ * True RMS and peak of an s16 mono chunk, 0..1. Deliberately *not* `rmsOf()` from
+ * audio.ts: that one scales by 4.5 so the level dot moves on quiet speech, which is
+ * fine for a glow and useless for a dBFS meter.
+ */
+function trueLevels(pcm: Uint8Array): { rms: number; peak: number } {
+  const v = new Int16Array(pcm.buffer, pcm.byteOffset, pcm.byteLength >> 1);
+  if (!v.length) return { rms: 0, peak: 0 };
+  let sum = 0;
+  let peak = 0;
+  for (let i = 0; i < v.length; i++) {
+    const x = v[i]! / 32768;
+    sum += x * x;
+    const a = x < 0 ? -x : x;
+    if (a > peak) peak = a;
+  }
+  return { rms: Math.sqrt(sum / v.length), peak };
+}
+
+/** A 0..1 level in dBFS; digital silence is -Infinity. */
+function dbOf(level: number): number {
+  return level > 0 ? 20 * Math.log10(level) : Number.NEGATIVE_INFINITY;
+}
+
+/** dBFS as the overlay prints it: "—" for digital silence, no signal to report. */
+function dbText(level: number): string {
+  const db = dbOf(level);
+  return Number.isFinite(db) ? `${db.toFixed(0)} dBFS` : "—";
+}
+
+/** A level's 0..1 position on the overlay's -70..0 dBFS scale. */
+function dbLevel(level: number): number {
+  const db = dbOf(level);
+  if (!Number.isFinite(db)) return 0;
+  const t = (db - DBG_DB_MIN) / (DBG_DB_MAX - DBG_DB_MIN);
+  return t < 0 ? 0 : t > 1 ? 1 : t;
+}
+
+/** Share of 1s in a flag array (0..1); 0 when there is nothing to average. */
+function ratio(flags: number[]): number {
+  if (!flags.length) return 0;
+  let ones = 0;
+  for (const f of flags) ones += f;
+  return ones / flags.length;
+}
+
+/** The q-th percentile of a sample (0..1), for "how loud is the voice, roughly". */
+function percentile(values: number[], q: number): number {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const i = Math.min(sorted.length - 1, Math.max(0, Math.round(q * (sorted.length - 1))));
+  return sorted[i]!;
 }
 
 function detach(box: Box | ListBox, child: Widget | null): void {

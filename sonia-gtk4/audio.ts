@@ -17,7 +17,7 @@
  * of the browser's AEC, and the reason this client never needs one of its own.
  */
 
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 
 export const MIC_RATE = 16000;
 /** High-pass corner (Hz) for the capture chain; `SONIA_MIC_HPF=0` turns it off. */
@@ -189,6 +189,108 @@ export const SILENT_FRAME = (() => {
   const z = new Uint8Array(FRAME_BYTES);
   return z;
 })();
+
+// ── capture volume preflight ───────────────────────────────────────────────
+//
+// The level of the *source* matters to this client in a way it does not matter to
+// the web UI. Chromium's getUserMedia runs an AGC over the raw device and can lift
+// a very quiet mic by tens of dB, so the browser keeps working on a machine whose
+// capture volume is wrong. A `pw-record` client applies no gain at all: whatever
+// the source emits is what the harness' VAD sees.
+//
+// And the internal mic of this laptop (Xiaomi Book Pro 14, SOF SoundWire) does not
+// fade out when its volume is lowered — it *closes*: below a threshold the DSP
+// emits digital silence, every sample exactly 0, so no amount of gain downstream
+// can bring the words back. Measured with the same TTS sentence played through the
+// speakers and captured with `pw-record`:
+//
+//   volume   exact-zero frames   frames over the 0.5 VAD threshold   max p
+//    21 %      184 / 187                     0 / 187                 0.07   ← deaf
+//    40 %        0 / 187                     0 / 187                 0.23
+//    60 %        0 / 187                    65 / 187                 0.99
+//    80 %        0 / 187                    78 / 187                 1.00
+//   100 %        0 / 187                    68 / 187                 1.00
+//
+// At 21 % the harness never got three consecutive frames over the start threshold,
+// so every attempt died as an empty utterance: the level dot twitched on the odd
+// blip that slipped through, and the words never arrived. That is the bug this
+// preflight exists to prevent — a capture volume nobody can hear is a *silent*
+// failure, and the client is the only thing that can notice it.
+
+/** Below this the SOF mic's own gate starts eating speech (see the table above). */
+export const MIN_MIC_VOLUME = 55;
+/** Where a too-quiet source is put instead: clear of that gate, still headroom. */
+export const TARGET_MIC_VOLUME = 80;
+
+export type CaptureSource = { name: string; description: string; percent: number; mute: boolean };
+export type VolumeFix = { name: string; description: string; from: number; to: number };
+
+/** Hardware capture sources (`alsa_input.*`) as PulseAudio/PipeWire reports them. */
+export function hardwareCaptureSources(): CaptureSource[] {
+  const r = spawnSync("pactl", ["--format=json", "list", "sources"], { encoding: "utf-8" });
+  if (r.status !== 0 || !r.stdout) return [];
+  let all: unknown;
+  try {
+    all = JSON.parse(r.stdout);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(all)) return [];
+  const out: CaptureSource[] = [];
+  for (const s of all as Record<string, unknown>[]) {
+    const name = s.name;
+    if (typeof name !== "string" || !name.startsWith("alsa_input.")) continue;
+    const chans = Object.values((s.volume ?? {}) as Record<string, { value_percent?: string }>);
+    const pcts = chans
+      .map((c) => Number.parseInt(String(c?.value_percent ?? ""), 10))
+      .filter((n) => Number.isFinite(n));
+    if (!pcts.length) continue;
+    out.push({
+      name,
+      description: typeof s.description === "string" ? s.description : name,
+      percent: Math.max(...pcts),
+      mute: s.mute === true,
+    });
+  }
+  return out;
+}
+
+/**
+ * Set one capture source's volume. Returns false when `pactl` refused (the source
+ * disappeared, or a permission/PipeWire problem) — the caller can then say so.
+ * Used by the startup preflight and by the calibration overlay's fix actions.
+ */
+export function setSourceVolume(name: string, percent: number): boolean {
+  const r = spawnSync("pactl", ["set-source-volume", name, `${percent}%`], { encoding: "utf-8" });
+  return r.status === 0;
+}
+
+/** Mute/unmute one capture source; same contract as `setSourceVolume`. */
+export function setSourceMute(name: string, mute: boolean): boolean {
+  const r = spawnSync("pactl", ["set-source-mute", name, mute ? "1" : "0"], { encoding: "utf-8" });
+  return r.status === 0;
+}
+
+/**
+ * Raise hardware mics that sit so low they are inaudible, and report what changed
+ * (empty = nothing to do). A *muted* source is left alone: that is a decision this
+ * client has no business overriding — only an accidental 21 % is repaired.
+ * `SONIA_MIC_VOLUME_FIX=0` turns the whole thing off.
+ */
+export function fixLowCaptureVolume(
+  minPercent = MIN_MIC_VOLUME,
+  targetPercent = TARGET_MIC_VOLUME,
+): VolumeFix[] {
+  if (process.env.SONIA_MIC_VOLUME_FIX === "0") return [];
+  const fixed: VolumeFix[] = [];
+  for (const s of hardwareCaptureSources()) {
+    if (s.mute || s.percent >= minPercent) continue;
+    if (setSourceVolume(s.name, targetPercent)) {
+      fixed.push({ name: s.name, description: s.description, from: s.percent, to: targetPercent });
+    }
+  }
+  return fixed;
+}
 
 export class Mic {
   private proc: ChildProcess | null = null;

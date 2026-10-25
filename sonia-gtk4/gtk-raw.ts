@@ -29,6 +29,7 @@ import { Adjustment, type ScrolledWindow } from "@sigmasd/gtk/gtk4";
 
 const gtk = dlopen("libgtk-4.so.1", {
   gtk_widget_get_parent: { args: ["ptr"], returns: "ptr" },
+  gtk_widget_get_width: { args: ["ptr"], returns: "i32" },
   gtk_window_set_icon_name: { args: ["ptr", "ptr"], returns: "void" },
   gtk_window_set_default_icon_name: { args: ["ptr"], returns: "void" },
   // GTK 4.10+: the same named colours the stylesheet writes as @accent_color &
@@ -37,10 +38,17 @@ const gtk = dlopen("libgtk-4.so.1", {
 }) as unknown as {
   symbols: {
     gtk_widget_get_parent: (w: unknown) => unknown;
+    gtk_widget_get_width: (w: unknown) => number;
     gtk_window_set_icon_name: (w: unknown, name: unknown) => void;
     gtk_window_set_default_icon_name: (name: unknown) => void;
     gtk_style_context_lookup_color: (ctx: unknown, name: unknown, rgba: unknown) => number;
   };
+};
+
+const gio = dlopen("libgio-2.0.so.0", {
+  g_application_get_is_registered: { args: ["ptr"], returns: "bool" },
+}) as unknown as {
+  symbols: { g_application_get_is_registered: (app: unknown) => boolean };
 };
 
 const glib = dlopen("libglib-2.0.so.0", {
@@ -118,6 +126,41 @@ export function onGtkIdleOnce(key: string, fn: () => void): void {
 export function parentOf(w: Widget | null): unknown {
   if (!w) return null;
   return gtk.symbols.gtk_widget_get_parent(w.ptr) ?? null;
+}
+
+/**
+ * The width a widget actually got from the layout, in pixels — 0 until it has
+ * been allocated for the first time.
+ *
+ * GTK4 has no `width` property on `GtkWidget`/`GtkWindow`: asking for it through
+ * `getProperty("width")` answers NULL and logs a GLib-GObject-CRITICAL on every
+ * call (which is what filled the terminal at startup and left the chat width
+ * budget stuck at its default). `gtk_widget_get_width()` is the real answer.
+ */
+export function widgetWidth(w: Widget): number {
+  try {
+    return gtk.symbols.gtk_widget_get_width(w.ptr) ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Did `g_application_register()` work? jsGTK's `register()` swallows the return
+ * value and `getIsRemote()` asserts when it failed, so the only safe question to
+ * ask afterwards is this one (GIO ≥ 2.28, the same lib the app already links).
+ *
+ * A FALSE here is the "hung terminal, no window" case: another process owns the
+ * app id but does not answer the D-Bus registration call. `activate()` would be
+ * a no-op on an unregistered application, so the caller must say so and leave.
+ */
+export function applicationIsRegistered(app: { ptr: unknown }): boolean {
+  try {
+    return gio.symbols.g_application_get_is_registered(app.ptr);
+  } catch {
+    // no libgio at all: treat as "cannot tell", let the normal path decide
+    return true;
+  }
 }
 
 /** The vertical adjustment of a scrolled window, wrapped without the ctor bug. */
