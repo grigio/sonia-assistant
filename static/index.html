@@ -461,8 +461,10 @@ const $ = (id) => document.getElementById(id);
 // in UI_STRINGS — the static markup is filled from it by applyLocale() (that is what the
 // data-i18n* attributes are), the running code asks t() / tf().
 // The catalogue itself lives in src/i18n.ts (the single source, also imported by the
-// GTK client): the server stamps it in below through `__UI_STRINGS__`, because this
-// page runs before the socket exists, so it cannot fetch those strings on its own.
+// GTK client): the server stamps it in on that marker line right below (uiStringsJson()),
+// because this page runs before the socket exists, so it cannot fetch those strings on
+// its own. Never write the marker's own name anywhere above that line: the stamp is a
+// text substitution and would burn itself on a comment first, leaving the code broken.
 const UI_STRINGS = __UI_STRINGS__; // ← src/i18n.ts, stamped in
 /** The tag the server stamped in — a raw, unstamped static/index.html stays Italian. */
 const LOCALE = Object.hasOwn(UI_STRINGS, "__LOCALE__") ? "__LOCALE__" : "it";

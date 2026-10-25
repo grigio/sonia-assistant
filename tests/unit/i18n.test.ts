@@ -25,6 +25,7 @@ import {
   UI_STRINGS,
   uiStringsJson,
 } from "../../src/i18n";
+import { stampIndexHtml } from "../../src/web";
 
 /** Every key the server side ships, one per message the user can end up reading. */
 const SAMPLE_KEYS = [
@@ -224,5 +225,27 @@ describe("UI_STRINGS is stamped into the page at GET /", () => {
       expect(itS2[key], `it is missing "${key}"`).toBeDefined();
       expect(enS2[key], `en is missing "${key}"`).toBeDefined();
     }
+  });
+
+  // The stamp is a plain text substitution: a marker that also sits in a comment
+  // *above* the real code line used to swallow the only `.replace()` and ship a page
+  // whose script dies on `ReferenceError: __UI_STRINGS__ is not defined` — no socket,
+  // no reconnect, "connecting…" for ever (the harness logs nothing).
+  test("the whole file is stamped, not just its first marker", () => {
+    const stamped = stampIndexHtml(html, "en");
+    expect(stamped).not.toContain("__UI_STRINGS__"); // code *and* any comment
+    expect(stamped).toContain('const UI_STRINGS = {"it":');
+    expect(stamped).toContain('lang="en"');
+    expect(stamped).toContain('Object.hasOwn(UI_STRINGS, "en")'); // the LOCALE pick
+    expect(stamped).not.toContain("<!--UIVER-->");
+    expect(stamped).toContain('const UI_VERSION = "'); // the hash went in
+  });
+
+  test("a marker in a comment cannot eat the one in the code", () => {
+    const raw = "// see `__UI_STRINGS__` below\nconst UI_STRINGS = __UI_STRINGS__;\n";
+    const stamped = stampIndexHtml(raw, "it");
+    expect(stamped).not.toContain("__UI_STRINGS__");
+    expect(stamped).toContain('const UI_STRINGS = {"it":');
+    expect(stamped).toContain('// see `{"it":'); // the comment got it too, harmlessly
   });
 });

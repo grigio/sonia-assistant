@@ -133,6 +133,30 @@ export function modelLabel(cfg: Config): string {
   return cfg.llmViaPi ? cfg.piModel : cfg.llmModel;
 }
 
+/**
+ * The three stamps applied to `static/index.html` at `GET /`, in order:
+ *
+ *  1. the catalogue — `__UI_STRINGS__` → `uiStringsJson()`;
+ *  2. `<!--UIVER-->` → a hash of the *raw* file, so it stays a cache-buster for the source;
+ *  3. `__LOCALE__` → `lang="…"` and the page's own `LOCALE` pick.
+ *
+ * **`replaceAll`, every time.** The markers are plain text that also occur in the file's
+ * own comments (`// … through \`__UI_STRINGS__\`, because this page runs before the
+ * socket exists…`); a first-match `String.replace` stamps the *comment* and leaves the
+ * real `const UI_STRINGS = __UI_STRINGS__;` untouched — the page then dies on
+ * `ReferenceError: __UI_STRINGS__ is not defined` before `connect()` ever runs and sits
+ * on "connecting…" for ever, with the harness logging nothing at all.
+ *
+ * A function replacement, not a string: the catalogue text may contain `$`, and `$&`
+ * has meaning in a string replacement.
+ */
+export function stampIndexHtml(raw: string, locale: Locale): string {
+  return raw
+    .replaceAll("__UI_STRINGS__", () => uiStringsJson())
+    .replace("<!--UIVER-->", () => crypto.createHash("sha1").update(raw).digest("hex").slice(0, 10))
+    .replaceAll("__LOCALE__", locale);
+}
+
 /** Tag stamped into the served page; it reloads itself when this changes. */
 export class WebApp {
   readonly mic = new QueueMic();
@@ -212,17 +236,7 @@ export class WebApp {
     const hit = this.pages.get(locale);
     if (hit && hit.mtimeMs === mtimeMs) return hit.html;
     const raw = await fsp.readFile(path.join(STATIC_DIR, "index.html"), "utf-8");
-    // a function replacement, not a string: the catalogue text may contain `$` and `$&`
-    // has meaning in a string replacement
-    const html = raw
-      .replace("__UI_STRINGS__", () => uiStringsJson())
-      .replace("<!--UIVER-->", () =>
-        crypto.createHash("sha1").update(raw).digest("hex").slice(0, 10),
-      )
-      // the page's language: `lang="__LOCALE__"` and `UI_STRINGS["__LOCALE__"]` are both
-      // stamped, so the browser paints the right language; the unstamped file reads
-      // `hasOwn(UI_STRINGS, "__LOCALE__")` → false → stays Italian as a safe default
-      .replaceAll("__LOCALE__", locale);
+    const html = stampIndexHtml(raw, locale);
     this.pages.set(locale, { mtimeMs, html });
     return html;
   }
