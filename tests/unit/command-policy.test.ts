@@ -294,16 +294,19 @@ describe("P0.4 — privileged and destructive classification", () => {
   });
 
   test("irreversible operations are confirmed even in auto", () => {
+    // The chown rule keys on the *current* home, so a fixed /home/g path only passed on
+    // the maintainer's machine (CI runs as /home/runner).
+    const homeX = path.join(os.homedir(), "x");
     for (const cmd of [
       "rm -rf ~/Documents",
-      "rm -r /home/g/x",
+      `rm -r ${homeX}`,
       "dd if=/dev/zero of=/dev/sda",
       "mkfs.ext4 /dev/sda1",
       "wipefs -a /dev/sda",
       "shred -u ~/x",
       "git clean -fdx",
       "chmod -R 777 ~",
-      "chown -R g /home/g/x",
+      `chown -R g ${homeX}`,
     ]) {
       expect(isDestructiveCommand(cmd)).toBe(true);
     }
