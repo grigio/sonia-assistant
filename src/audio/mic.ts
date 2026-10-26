@@ -96,10 +96,13 @@ export class QueueMic implements MicSource {
    * *oldest* audio goes so the assistant keeps up with the room.
    */
   private static readonly MAX = 16;
+  /** Set by `close()`: the consumer's `for await` must end, not wait for a push forever. */
+  private closed = false;
   /** For the log line: frames discarded because the consumer could not keep up. */
   droppedFrames = 0;
 
   push(pcm: Uint8Array): void {
+    if (this.closed) return;
     const merged = new Uint8Array(this.buf.length + pcm.length);
     merged.set(this.buf, 0);
     merged.set(pcm, this.buf.length);
@@ -120,11 +123,13 @@ export class QueueMic implements MicSource {
   async *frames(): AsyncGenerator<Uint8Array, void, unknown> {
     for (;;) {
       while (this.q.length) yield this.q.shift()!;
+      if (this.closed) return;
       await new Promise<void>((res) => (this.waiter = res));
     }
   }
 
   async close(): Promise<void> {
+    this.closed = true;
     this.waiter?.();
     this.waiter = null;
   }

@@ -18,14 +18,14 @@
  *     promise made to the user, and the banner is the only place it is visible;
  *   - an unknown id changes nothing and says nothing.
  */
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { Config } from "../../src/config";
 import type { TaskInfo } from "../../src/events";
 import { Assistant } from "../../src/harness/assistant";
-import { Tools } from "../../src/tools";
+import { MAX_TIMER_S, MAX_WATCH_S, MIN_WATCH_S, Tools } from "../../src/tools";
 
 type Ev = { type: string; tasks?: TaskInfo[]; status?: string; id?: number };
 
@@ -334,19 +334,70 @@ describe("the watch chip — a check repeated at an interval, forever", () => {
     done();
   });
 
-  test("no command → refused; a too-small `every` is lifted to the floor", async () => {
+  test("no command → refused; an out-of-range `every` is answered, not silently changed", async () => {
     const { tools, done } = fixture({ locale: "en" }); // minWatchS defaults to MIN_WATCH_S
     expect(await tools.call("start_watch", JSON.stringify({ every: 30 }))).toContain(
       "No command to watch",
     );
+    expect(
+      await tools.call(
+        "start_watch",
+        JSON.stringify({ command: "echo 42%", every: 1, label: "battery" }),
+      ),
+    ).toContain(`between ${MIN_WATCH_S} and ${MAX_WATCH_S}`);
+    expect(tools.tasks()).toHaveLength(0);
+    done();
+  });
+
+  test("a check slower than the interval never overlaps the next one", async () => {
+    const { tools, dir, done } = fixture({ locale: "en", minWatchS: 0 });
+    const ticks = path.join(dir, "ticks.txt");
     await tools.call(
       "start_watch",
-      JSON.stringify({ command: "echo 42%", every: 1, label: "battery" }),
+      JSON.stringify({
+        command: `echo x >> ${ticks}; sleep 0.5`,
+        every: 0.1,
+        label: "slow",
+      }),
     );
-    expect(tools.tasks()).toHaveLength(1);
-    expect(tools.tasks()[0]!.due_in_ms).toBeGreaterThan(4000); // floored at MIN_WATCH_S (5 s)
+    await sleep(300); // several old-style ticks would have started by now
+    const started = fs.existsSync(ticks) ? fs.readFileSync(ticks, "utf8").trim().split("\n") : [];
+    expect(started).toHaveLength(1); // one in flight, the next booked only after it ends
     tools.cancelTask("watch-1");
+    await sleep(50);
     done();
+  });
+});
+
+describe("timer and watch bounds", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "fd-bounds-"));
+  const tools = new Tools({ dataDir: tmp, announce: () => {}, cmdMode: "auto", locale: "en" });
+  afterAll(() => {
+    tools.close();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  test("a timer outside 1…24 h is answered, not clamped", async () => {
+    for (const seconds of [0, -5, 1e12, "abc"]) {
+      expect(await tools.call("set_timer", JSON.stringify({ seconds, label: "x" }))).toContain(
+        `between 1 and ${MAX_TIMER_S}`,
+      );
+    }
+    expect(tools.tasks()).toEqual([]);
+    // the boundary itself is accepted (then cancelled: no need to wait a day)
+    expect(
+      await tools.call("set_timer", JSON.stringify({ seconds: MAX_TIMER_S, label: "max" })),
+    ).toContain("86400");
+    tools.cancelTask("timer-1");
+  });
+
+  test("a watch outside 5…86400 s is answered, not clamped", async () => {
+    for (const every of [0, 1, 1e12, "abc"]) {
+      expect(
+        await tools.call("start_watch", JSON.stringify({ command: "echo x", every, label: "x" })),
+      ).toContain(`between ${MIN_WATCH_S} and ${MAX_WATCH_S}`);
+    }
+    expect(tools.tasks()).toEqual([]);
   });
 });
 

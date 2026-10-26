@@ -64,12 +64,28 @@ export class Harness extends Assistant {
   async runText(): Promise<void> {
     this.spawnAnnouncer();
     const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+    // Lines are queued, never awaited inside the read loop: a typed "sì"/"no" has to be
+    // read *while* the response that asked for confirmation is still in flight, and a
+    // second request typed during an answer must wait its turn instead of being lost.
+    let chain: Promise<void> = Promise.resolve();
+    const enqueue = (text: string): void => {
+      chain = chain
+        .then(async () => {
+          while (this.resp !== null) await sleep(100);
+          this.startResponse(text, now());
+        })
+        .catch((e) => this.log(`[text] ${e instanceof Error ? e.message : String(e)}`));
+    };
     for await (const line of rl) {
       const text = line.trim();
       if (!text) continue;
-      while (this.resp !== null) await sleep(100);
-      this.startResponse(text, now());
+      if (this.pendingApproval !== null && this.answerApprovalText(text)) {
+        this.log(`   💬 ${text}`);
+        continue;
+      }
+      enqueue(text);
     }
+    await chain;
     while (this.resp !== null) await sleep(200); // let the last answer finish
   }
 

@@ -13,7 +13,7 @@ import type { Config } from "../config";
 import { contextsFromPiList, piModelRows } from "../context";
 import { type Locale, t } from "../i18n";
 import { shlexSplit } from "../shlex";
-import { abortError, appendCapped, which } from "../util";
+import { abortError, CappedBuffer, which } from "../util";
 import type { ChatMessage, StreamItem } from "./llm-types";
 import { piResultText, piToolInfo, toolEnd, toolStart } from "./toolcards";
 
@@ -22,6 +22,9 @@ export const PI_DROP_ENV = ["PI_SESSION_ID", "PI_SESSION_FILE", "PI_SESSION_DIR"
 export const SESSION_FLAGS = ["-c", "--continue", "--session", "--session-id"];
 /** Cap on the stdout/stderr a one-shot pi subprocess may accumulate (kept: the tail). */
 const CAP_BYTES = 256_000;
+
+/** How many `conv<n>` dirs survive a startup: the newest (a restart resumes the newest). */
+const PI_KEEP_CONVS = 10;
 
 /** what we add to the voice prompt so pi's own tools/skills are the ones to use */
 export const PI_ADDENDUM = (locale: Locale): string => t(locale, "pi.addendum");
@@ -84,18 +87,29 @@ export class PiSession {
 
   /** Continue the newest conv<n> that already exists in PI_CWD (restart safety). */
   private resumeConv(): number {
-    let max = 0;
     let entries: string[] = [];
     try {
       entries = fs.readdirSync(this.cfg.piCwd);
     } catch {
       return 0;
     }
+    const convs: number[] = [];
     for (const name of entries) {
       const m = /^conv(\d+)$/.exec(name);
-      if (m) max = Math.max(max, Number(m[1]));
+      if (m) convs.push(Number(m[1]));
     }
-    return max;
+    // 🧹/⟲ create a conv<n+1> per reset: nothing ever pruned them, so an assistant
+    // reset a few times a day grows the dir forever. Keep the newest ones — they are the
+    // only ones a restart can resume — and delete the rest (pi's own session files).
+    const keep = Math.max(1, PI_KEEP_CONVS);
+    for (const n of convs.sort((a, b) => a - b).slice(0, -keep)) {
+      try {
+        fs.rmSync(path.join(this.cfg.piCwd, `conv${n}`), { recursive: true, force: true });
+      } catch {
+        /* best effort: a busy dir just survives to the next reset */
+      }
+    }
+    return convs.length ? Math.max(...convs) : 0;
   }
 
   /** The UI toggled the checkbox: pi's session may miss the turns made via the API. */
@@ -276,17 +290,17 @@ export class PiSession {
       );
       if (signal?.aborted) return onAbort();
       signal?.addEventListener("abort", onAbort, { once: true });
-      let out = "";
-      let err = "";
-      proc.stdout.on("data", (d) => (out = appendCapped(out, String(d), CAP_BYTES)));
-      proc.stderr.on("data", (d) => (err = appendCapped(err, String(d), CAP_BYTES)));
+      const out = new CappedBuffer(CAP_BYTES);
+      const err = new CappedBuffer(CAP_BYTES);
+      proc.stdout.on("data", (d) => out.add(String(d)));
+      proc.stderr.on("data", (d) => err.add(String(d)));
       proc.on("error", (e) => finish(() => reject(e)));
       proc.on("close", (rc) =>
         finish(() => {
           if (rc) {
-            const tail = (err || out).slice(-300).trim();
+            const tail = (err.text() || out.text()).slice(-300).trim();
             reject(new Error(`pi exit ${rc}: ${tail}`));
-          } else resolve(out);
+          } else resolve(out.text());
         }),
       );
     });
@@ -411,14 +425,16 @@ function stdoutLines(proc: ReturnType<typeof spawn>): AsyncGenerator<string, voi
   if (!stream) throw new Error("pi: no stdout");
   return (async function* () {
     let buf = "";
+    const dec = new TextDecoder("utf-8");
     for await (const chunk of stream as AsyncIterable<Buffer>) {
-      buf += String(chunk);
+      buf += dec.decode(chunk, { stream: true });
       let idx: number;
       while ((idx = buf.indexOf("\n")) >= 0) {
         yield buf.slice(0, idx).replace(/\r$/, "");
         buf = buf.slice(idx + 1);
       }
     }
+    buf += dec.decode();
     if (buf) yield buf;
   })();
 }

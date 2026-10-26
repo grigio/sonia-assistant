@@ -72,6 +72,44 @@ export type HelloConfig = {
 
 // ── server → browser ───────────────────────────────────────────────────────
 
+/**
+ * Every `ServerEvent.type`, in one runtime list. The union below is the source of truth
+ * for types; this constant is for the test that checks *both* front-ends (`static/index.html`
+ * and `sonia-gtk4/app.ts`) have a `case` for each one — an event nobody renders is a
+ * silent regression, and a `case` for an event nobody sends is dead code.
+ */
+export const SERVER_EVENT_TYPES = [
+  "hello",
+  "state",
+  "partial",
+  "user",
+  "reasoning",
+  "assistant",
+  "assistant_done",
+  "assistant_cancel",
+  "latency",
+  "context",
+  "flush",
+  "chat_reset",
+  "session_taken",
+  "chat_rewound",
+  "event",
+  "tasks",
+  "tool",
+  "command_request",
+  "command_resolved",
+  "command_start",
+  "command_result",
+  "models",
+  "voices",
+  "skills",
+  "model_loading",
+  "model_ready",
+  "model_error",
+] as const;
+
+export type ServerEventType = (typeof SERVER_EVENT_TYPES)[number];
+
 export type ServerEvent =
   | {
       type: "hello";

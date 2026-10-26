@@ -6,7 +6,7 @@
  */
 
 import { spawn } from "node:child_process";
-import { appendCapped } from "./util";
+import { CappedBuffer } from "./util";
 
 /**
  * Cap on the captured stdout+stderr (the *tail* is what matters). The whole point: a
@@ -37,10 +37,15 @@ export async function runShell(
     detached: true, // own process group → kill the whole tree on timeout/abort
   });
 
-  let out = "";
-  const grab = (d: Buffer) => (out = appendCapped(out, String(d), MAX_OUTPUT));
-  proc.stdout.on("data", grab);
-  proc.stderr.on("data", grab);
+  // chunk-array capture: a chatty command must not copy its whole (capped) output per chunk
+  const out = new CappedBuffer(MAX_OUTPUT);
+  // stdout and stderr are separate byte streams: each gets its own decoder so a
+  // multi-byte character split across chunks survives (Italian accents in output).
+  const outDec = new TextDecoder("utf-8");
+  const errDec = new TextDecoder("utf-8");
+  const grab = (dec: TextDecoder) => (d: Buffer) => out.add(dec.decode(d, { stream: true }));
+  proc.stdout.on("data", grab(outDec));
+  proc.stderr.on("data", grab(errDec));
 
   let timedOut = false;
   let aborted = false;
@@ -73,6 +78,9 @@ export async function runShell(
     signal?.removeEventListener("abort", onAbort);
   });
 
+  // flush a character whose remaining bytes never arrived before `close`
+  out.add(outDec.decode());
+  out.add(errDec.decode());
   if (aborted) throw new Error("command aborted");
-  return { rc, output: out, timedOut };
+  return { rc, output: out.text(), timedOut };
 }

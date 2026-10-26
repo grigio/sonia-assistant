@@ -3,6 +3,7 @@
 import net from "node:net";
 import { pcm16ToWavBytes } from "../audio/wav";
 import { abortError, timeoutSignal } from "../util";
+import { sseData } from "./sse";
 
 type PartialCb = (text: string) => void;
 /** Failure report: ASR errors used to be a bare `console.error` in library code. */
@@ -38,6 +39,7 @@ export class LiveTranscription {
   private chunked = false;
   private headers: Record<string, string> = {};
   private sseBuf = "";
+  private readonly sseDec = new TextDecoder("utf-8");
 
   constructor(
     private readonly baseUrl: string,
@@ -294,7 +296,7 @@ export class LiveTranscription {
   }
 
   private feedBody(data: Buffer): void {
-    this.sseBuf += data.toString("utf-8");
+    this.sseBuf += this.sseDec.decode(data, { stream: true });
     let idx: number;
     while ((idx = this.sseBuf.indexOf("\n")) >= 0) {
       const line = this.sseBuf.slice(0, idx).replace(/\r$/, "");
@@ -371,6 +373,11 @@ export class SmartTurn {
 
 // ───────────────────────────── streaming TTS ─────────────────────────────
 
+/** A TTS server that accepts the connection but never answers headers. */
+export const TTS_HEADERS_TIMEOUT_MS = 10_000;
+/** …or sends some audio and then stalls mid-sentence. */
+export const TTS_IDLE_TIMEOUT_MS = 20_000;
+
 export class TTS {
   rate = 24000;
   private readonly base: string;
@@ -435,47 +442,84 @@ export class TTS {
 
   /** SSE stream of `speech.audio.delta` events → PCM16 chunks. */
   async *stream(text: string, signal?: AbortSignal): AsyncGenerator<Uint8Array, void, unknown> {
-    let r: Response;
-    try {
-      r = await fetch(`${this.base}/v1/audio/speech`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: this.model,
-          input: text,
-          voice: this.voice,
-          response_format: "pcm",
-          stream_format: "sse",
-        }),
-        ...(signal ? { signal } : {}),
-      });
-    } catch (e) {
-      // a refused/reset connection says which server it was (`String(e)` alone loses the
-      // URL), and a cancellation must keep its AbortError shape for the callers above
-      if (signal?.aborted) throw e;
-      throw new Error(`TTS ${this.base}: ${e instanceof Error ? e.message : e}`);
+    // One controller for the whole synthesis: the caller's signal (barge-in, stop) and
+    // our two watchdogs abort the same request. A server that stops sending used to hang
+    // the turn until the user interrupted it.
+    const ctl = new AbortController();
+    const onAbort = () => ctl.abort(signal?.reason);
+    if (signal) {
+      if (signal.aborted) ctl.abort(signal.reason);
+      else signal.addEventListener("abort", onAbort, { once: true });
     }
-    if (!r.ok) throw new Error(`TTS HTTP ${r.status}: ${(await r.text()).slice(0, 300)}`);
-    if (!r.body) throw new Error("TTS: empty body");
-    for await (const raw of r.body as unknown as AsyncIterable<Uint8Array>) {
-      const lines = Buffer.from(raw).toString("utf-8").split("\n");
-      for (const rawLine of lines) {
-        const line = rawLine.trim();
-        if (!line.startsWith("data:")) continue;
-        const data = line.slice(5).trim();
-        if (data === "[DONE]") return;
-        let ev: Record<string, unknown>;
-        try {
-          ev = JSON.parse(data);
-        } catch {
-          continue;
-        }
-        if (ev.type === "speech.audio.delta") {
-          yield Buffer.from(ev.audio as string, "base64");
-        } else if (ev.type === "error") {
-          throw new Error(`TTS stream error: ${data}`);
-        }
+    let headersTimer: ReturnType<typeof setTimeout> | undefined;
+    let idleTimer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut: "headers" | "idle" | null = null;
+    const armIdle = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        timedOut = "idle";
+        ctl.abort();
+      }, TTS_IDLE_TIMEOUT_MS);
+    };
+    headersTimer = setTimeout(() => {
+      timedOut = "headers";
+      ctl.abort();
+    }, TTS_HEADERS_TIMEOUT_MS);
+
+    try {
+      let r: Response;
+      try {
+        r = await fetch(`${this.base}/v1/audio/speech`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: this.model,
+            input: text,
+            voice: this.voice,
+            response_format: "pcm",
+            stream_format: "sse",
+          }),
+          signal: ctl.signal,
+        });
+      } catch (e) {
+        // a refused/reset connection says which server it was (`String(e)` alone loses the
+        // URL), and a cancellation must keep its AbortError shape for the callers above
+        if (signal?.aborted) throw e;
+        if (timedOut === "headers")
+          throw new Error(`TTS ${this.base}: no answer within ${TTS_HEADERS_TIMEOUT_MS / 1000} s`);
+        throw new Error(`TTS ${this.base}: ${e instanceof Error ? e.message : e}`);
+      } finally {
+        clearTimeout(headersTimer);
       }
+      if (!r.ok) throw new Error(`TTS HTTP ${r.status}: ${(await r.text()).slice(0, 300)}`);
+      if (!r.body) throw new Error("TTS: empty body");
+      armIdle(); // the body has started: now the watchdog is "no audio", not "no headers"
+      try {
+        for await (const data of sseData(r.body as unknown as AsyncIterable<Uint8Array>)) {
+          armIdle();
+          if (data === "[DONE]") return;
+          let ev: Record<string, unknown>;
+          try {
+            ev = JSON.parse(data) as Record<string, unknown>;
+          } catch {
+            continue;
+          }
+          if (ev.type === "speech.audio.delta") {
+            yield Buffer.from(ev.audio as string, "base64");
+          } else if (ev.type === "error") {
+            throw new Error(`TTS stream error: ${data}`);
+          }
+        }
+      } catch (e) {
+        if (signal?.aborted) throw e;
+        if (timedOut === "idle")
+          throw new Error(`TTS ${this.base}: no audio for ${TTS_IDLE_TIMEOUT_MS / 1000} s`);
+        throw e;
+      }
+    } finally {
+      clearTimeout(headersTimer);
+      clearTimeout(idleTimer);
+      signal?.removeEventListener("abort", onAbort);
     }
   }
 }

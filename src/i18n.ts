@@ -112,6 +112,10 @@ const it = {
   "cmd.noOutput": "(nessun output)",
   /** A ✕ on the banner killed the shell: what the model is told instead of an output. */
   "cmd.cancelled": "Comando annullato dall'utente: il processo è stato terminato.",
+  /** Why a P0.4 command is at the approval prompt (shown next to the model's reason). */
+  "cmd.whyPrivileged": "comando privilegiato",
+  "cmd.whyDestructive": "operazione distruttiva",
+  "cmd.whyUntrusted": "dopo contenuto non fidato",
 
   // ── the banner above the chat (pending timers / running commands / watches) ──
   "task.cancelTimer": "⏹ timer «{label}» annullato",
@@ -120,6 +124,7 @@ const it = {
 
   // ── the watch tool (a read-only check, repeated until it is stopped) ──
   "watch.none": "Nessun comando da controllare.",
+  "watch.badEvery": "Intervallo non valido: indicami un numero di secondi tra {min} e {max}.",
   "watch.started":
     "Controllo «{label}» avviato: ripete il comando ogni {s} secondi, da solo, fino a " +
     "quando non lo fermi.",
@@ -137,6 +142,7 @@ const it = {
 
   // ── timer ──
   "timer.set": "Timer '{label}' impostato per {s} secondi.",
+  "timer.badSeconds": "Durata del timer non valida: indicami un numero di secondi tra 1 e {max}.",
 
   // ── notes ──
   "note.saved": "Nota salvata.",
@@ -166,6 +172,7 @@ const it = {
   "tool.badArgs":
     "Argomenti non validi per {name}: il JSON è malformato. Riprova con gli argomenti " +
     "previsti dallo schema della funzione.",
+  "ctx.trimmed": "…[troncato: {n} caratteri rimossi per stare nella finestra di contesto]…",
 } as const;
 
 const en: Record<keyof typeof it, string> = {
@@ -233,12 +240,16 @@ const en: Record<keyof typeof it, string> = {
   "cmd.timeout": "[timed out after {s}s] ",
   "cmd.noOutput": "(no output)",
   "cmd.cancelled": "Command cancelled by the user: the process was killed.",
+  "cmd.whyPrivileged": "privileged command",
+  "cmd.whyDestructive": "destructive operation",
+  "cmd.whyUntrusted": "after untrusted content",
 
   "task.cancelTimer": "⏹ timer «{label}» cancelled",
   "task.cancelCommand": "⏹ command stopped: «{label}»",
   "task.cancelWatch": "⏹ watch «{label}» stopped",
 
   "watch.none": "No command to watch.",
+  "watch.badEvery": "Invalid interval: give me a number of seconds between {min} and {max}.",
   "watch.started":
     "Watch «{label}» started: it repeats the command every {s} seconds on its own, until " +
     "you stop it.",
@@ -253,6 +264,7 @@ const en: Record<keyof typeof it, string> = {
   "date.full": "{date}, {time}",
 
   "timer.set": "Timer '{label}' set for {s} seconds.",
+  "timer.badSeconds": "Invalid timer duration: give me a number of seconds between 1 and {max}.",
 
   "note.saved": "Note saved.",
   "note.noneRemove": "No note to remove.",
@@ -276,6 +288,7 @@ const en: Record<keyof typeof it, string> = {
   "tool.badArgs":
     "Invalid arguments for {name}: the JSON is malformed. Retry with the fields the " +
     "function schema expects.",
+  "ctx.trimmed": "…[trimmed: {n} characters removed to fit the context window]…",
 };
 
 const CATALOG: Record<Locale, Record<keyof typeof it, string>> = { it, en };

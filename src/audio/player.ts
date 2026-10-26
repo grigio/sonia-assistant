@@ -11,11 +11,60 @@ import fs from "node:fs";
 import { sleep } from "../util";
 
 type Segment = {
-  pcm: Uint8Array;
+  /** PCM chunks as they arrived: concatenating on every TTS delta was O(n²). */
+  chunks: Uint8Array[];
+  /** Read offset inside `chunks[0]`; consumed chunks are shifted off. */
+  head: number;
+  /** Bytes still unread across `chunks`. */
+  length: number;
   tag: string; // the sentence text this audio speaks
   started: boolean;
   done: boolean; // no more audio will be appended
 };
+
+/** Append a chunk without touching the ones already queued. */
+function appendChunk(seg: Segment, pcm: Uint8Array): void {
+  if (!pcm.length) return;
+  seg.chunks.push(pcm);
+  seg.length += pcm.length;
+}
+
+/**
+ * Remove up to `n` bytes from the front. Returns a view when one chunk holds enough,
+ * otherwise copies the span (the only case that allocates).
+ */
+function takeBytes(seg: Segment, n: number): Uint8Array {
+  const outLen = Math.min(n, seg.length);
+  if (outLen <= 0) return new Uint8Array(0);
+  const first = seg.chunks[0]!;
+  const firstAvail = first.length - seg.head;
+  if (firstAvail >= outLen) {
+    const view = first.subarray(seg.head, seg.head + outLen);
+    seg.head += outLen;
+    seg.length -= outLen;
+    if (seg.head === first.length) {
+      seg.chunks.shift();
+      seg.head = 0;
+    }
+    return view;
+  }
+  const out = new Uint8Array(outLen);
+  let written = 0;
+  while (written < outLen) {
+    const chunk = seg.chunks[0]!;
+    const avail = chunk.length - seg.head;
+    const take = Math.min(avail, outLen - written);
+    out.set(chunk.subarray(seg.head, seg.head + take), written);
+    written += take;
+    seg.head += take;
+    if (seg.head === chunk.length) {
+      seg.chunks.shift();
+      seg.head = 0;
+    }
+  }
+  seg.length -= outLen;
+  return out;
+}
 
 type Writer = (pcm: Uint8Array) => void;
 
@@ -23,6 +72,8 @@ export type PlayerSink = "pipewire" | "null" | "callback";
 
 export class Player {
   static readonly SLICE_MS = 20;
+  /** How long a full `pw-cat` stdin buffer may block the pacing loop. */
+  static readonly DRAIN_TIMEOUT_MS = 500;
 
   writer: Writer | null = null; // used when sink == "callback"
   onFlush: (() => void) | null = null;
@@ -104,19 +155,16 @@ export class Player {
   // ── queue control ──
 
   beginSegment(tag: string): void {
-    this.queue.push({ pcm: new Uint8Array(0), tag, started: false, done: false });
+    this.queue.push({ chunks: [], head: 0, length: 0, tag, started: false, done: false });
     this.wake.set();
   }
 
   enqueue(pcm: Uint8Array): void {
     const last = this.queue[this.queue.length - 1];
     if (!last || last.done)
-      this.queue.push({ pcm: new Uint8Array(0), tag: "", started: false, done: false });
+      this.queue.push({ chunks: [], head: 0, length: 0, tag: "", started: false, done: false });
     const seg = this.queue[this.queue.length - 1]!;
-    const merged = new Uint8Array(seg.pcm.length + pcm.length);
-    merged.set(seg.pcm, 0);
-    merged.set(pcm, seg.pcm.length);
-    seg.pcm = merged;
+    appendChunk(seg, pcm); // no copy: a TTS stream used to re-allocate the whole tail every delta
     this.wake.set();
   }
 
@@ -183,6 +231,37 @@ export class Player {
 
   // ── pacing loop ──
 
+  /**
+   * Write one slice to `pw-cat`, waiting (briefly) if its stdin buffer is full. Without
+   * this, `stdin.write()` queued without bound while the player kept its own clock; a
+   * stalled reader would grow the Node buffer for the whole utterance. The wait is capped
+   * so a dead `pw-cat` cannot freeze playback either — the slice is dropped and the next
+   * one tries again.
+   */
+  private async writeSlice(pcm: Uint8Array): Promise<void> {
+    const stdin = this.proc?.stdin;
+    if (!stdin || stdin.destroyed) return;
+    try {
+      if (stdin.write(pcm)) return;
+    } catch {
+      return; // reader went away
+    }
+    await new Promise<void>((resolve) => {
+      let timer: ReturnType<typeof setTimeout>;
+      const done = () => {
+        clearTimeout(timer);
+        stdin.off("drain", done);
+        stdin.off("error", done);
+        stdin.off("close", done);
+        resolve();
+      };
+      timer = setTimeout(done, Player.DRAIN_TIMEOUT_MS);
+      stdin.once("drain", done);
+      stdin.once("error", done);
+      stdin.once("close", done);
+    });
+  }
+
   private async run(): Promise<void> {
     const sliceBytes = ((this.rate * Player.SLICE_MS) / 1000) * 2;
     const lead = this.latencyMs / 1000; // keep at most ~one device buffer queued
@@ -201,11 +280,11 @@ export class Player {
       }
 
       const seg = this.queue[0]!;
-      if (!seg.pcm.length && seg.done) {
+      if (!seg.length && seg.done) {
         this.queue.shift();
         continue;
       }
-      if (!seg.pcm.length && !seg.started) {
+      if (!seg.length && !seg.started) {
         // nothing to play yet for this sentence: wait without announcing it
         this.wake.clear();
         await this.wake.wait(50);
@@ -220,7 +299,7 @@ export class Player {
         }
         this.onSegmentStart?.(seg.tag);
       }
-      if (!seg.pcm.length) {
+      if (!seg.length) {
         // sentence still being synthesized: wait for more audio (underrun)
         this.wake.clear();
         await this.wake.wait(50);
@@ -228,10 +307,8 @@ export class Player {
         continue;
       }
 
-      const chunk = seg.pcm.subarray(0, sliceBytes);
-      seg.pcm = seg.pcm.subarray(sliceBytes);
-      const owned = chunk.slice(); // detach from the (mutable) segment buffer
-      this.proc?.stdin?.write(owned);
+      const owned = takeBytes(seg, sliceBytes);
+      await this.writeSlice(owned);
       this.writer?.(owned);
       if (this.recFd !== null) {
         this.recordSilenceUntilNow();

@@ -7,7 +7,12 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ChatMessage } from "./clients/llm-types";
 import type { ToolPayload } from "./clients/toolcards";
-import { isSafeCommand, isSensitiveCommand } from "./command-policy";
+import {
+  isDestructiveCommand,
+  isPrivilegedCommand,
+  isSafeCommand,
+  isSensitiveCommand,
+} from "./command-policy";
 import type { TaskInfo } from "./events";
 import { detectLocale, intlLocale, type Locale, parseLocale, t } from "./i18n";
 import { runShell } from "./shell-runner";
@@ -15,6 +20,8 @@ import type { Skills } from "./skills";
 import { writeJsonAtomic } from "./util";
 
 export {
+  isDestructiveCommand,
+  isPrivilegedCommand,
   isSafeCommand,
   isSkillCommand,
   isTrustedSkillLine,
@@ -77,6 +84,13 @@ export const SCHEMAS: Record<string, unknown>[] = [
           match: {
             type: "string",
             description: "Optional: tell the user only when the output starts containing this text",
+          },
+          lang: {
+            type: "string",
+            enum: ["it", "en"],
+            description:
+              "Language of the user's request ('it' or 'en'): later checks are spoken in " +
+              "that language",
           },
         },
         required: ["command", "every"],
@@ -186,11 +200,11 @@ export const COMMAND_SCHEMA: Record<string, unknown> = {
     name: "run_command",
     description:
       "Runs a shell command (bash) on the user's local Linux computer " +
-      "(Arch-based, sudo available without a password) and returns its output. Use it for " +
+      "(Arch-based) and returns its output. Use it for " +
       "system info, files, processes, network, packages, and for the scripts of a skill " +
       "(commands inside the skills directory run without confirmation). Non-interactive " +
-      "commands only. Depending on the approval policy, anything else may ask the user for " +
-      "confirmation first.",
+      "commands only. Privileged commands (sudo, doas, pkexec, su), destructive operations " +
+      "and anything outside the approval policy always ask the user for confirmation first.",
     parameters: {
       type: "object",
       properties: {
@@ -275,6 +289,8 @@ type WatchTask = {
   dueAt: number;
   /** The language of the request that started it — what its checks are spoken in. */
   locale: Locale;
+  /** True while a check is in flight: the next tick is booked only when it ends. */
+  running: boolean;
   /** Kills the check currently running; a fresh one is made for every tick. */
   ctl: AbortController;
   timer: ReturnType<typeof setTimeout> | null;
@@ -285,6 +301,15 @@ type WatchTask = {
  * leaves it, and a 1-second loop of shell commands is a load the user never asked for.
  */
 export const MIN_WATCH_S = 5;
+
+/**
+ * A timer or a watch may not be set further out than this (24 h). Bun clamps a delay above
+ * 2³¹−1 ms to 1 ms — a `1e12`-second request would fire *immediately* — and an enormous
+ * `every` would make the watch's arithmetic meaningless. Out-of-range input is answered
+ * with an error, never silently narrowed.
+ */
+export const MAX_TIMER_S = 24 * 60 * 60;
+export const MAX_WATCH_S = MAX_TIMER_S;
 
 /**
  * How much of a long command output the model gets: its first and its last characters,
@@ -302,6 +327,15 @@ const CLIP_TAIL = 2500;
 
 type EmitFn = (ev: ToolPayload | Record<string, unknown>) => void;
 type ApproveFn = (command: string, reason: string) => Promise<boolean>;
+/** Per-call policy hints from the harness (not from the model). */
+type CallOptions = {
+  /**
+   * Ask even in `auto` when the command is not strictly read-only. The harness sets this
+   * after the tool gate failed and after a shell/web result tainted the turn (P0.4): the
+   * model may have been told to run something by the text it just read.
+   */
+  forceApproval?: boolean;
+};
 
 export class Tools {
   readonly notesPath: string;
@@ -376,7 +410,12 @@ export class Tools {
     return this.cmdMode === "off" ? [...SCHEMAS] : [...SCHEMAS, COMMAND_SCHEMA];
   }
 
-  async runCommand(command: string, reason = "", signal?: AbortSignal): Promise<string> {
+  async runCommand(
+    command: string,
+    reason = "",
+    signal?: AbortSignal,
+    forceApproval = false,
+  ): Promise<string> {
     const epoch = this.chatEpoch(); // 🧹 while this runs → the whole call is old-chat data
     command = command.trim();
     if (!command) return t(this.locale, "cmd.none");
@@ -385,6 +424,13 @@ export class Tools {
     this.cmdSeq++;
     const cid = this.cmdSeq;
     const safe = isSafeCommand(command, this.skills?.dir);
+    // P0.4: two classes are confirmed even in `auto` — root-level escalation and the
+    // irreversible operations a prompt injection would reach for. `forceApproval` comes
+    // from the harness (gate failure / a turn tainted by shell or web output) and only
+    // applies to commands that are not strictly read-only.
+    const privileged = isPrivilegedCommand(command);
+    const destructive = isDestructiveCommand(command);
+    const mustApprove = privileged || destructive || (forceApproval && !safe);
 
     // Sensitive paths are never touched unattended (command-policy.ts, rule 4): "ask"
     // prompts (safe=false → the approval below); "auto" — the mode where there is no one
@@ -396,8 +442,18 @@ export class Tools {
       return t(this.locale, "cmd.sensitive");
     }
 
-    if (this.cmdMode === "ask" && !safe) {
-      const ok = this.approve ? await this.approve(command, reason) : false;
+    if (mustApprove || (this.cmdMode === "ask" && !safe)) {
+      const why = [
+        privileged ? t(this.locale, "cmd.whyPrivileged") : "",
+        destructive ? t(this.locale, "cmd.whyDestructive") : "",
+        forceApproval && !privileged && !destructive ? t(this.locale, "cmd.whyUntrusted") : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+      const approvalReason = [reason.trim(), why].filter(Boolean).join(" — ");
+      // No approver (headless harness, text mode without a prompt, a test) means no:
+      // privileged/destructive calls fail closed instead of falling through to `auto`.
+      const ok = this.approve ? await this.approve(command, approvalReason) : false;
       if (!ok) {
         if (this.chatEpoch() === epoch)
           this.emit({ type: "command_result", id: cid, command, status: "denied", output: "" });
@@ -405,7 +461,12 @@ export class Tools {
       }
     }
     if (this.chatEpoch() === epoch)
-      this.emit({ type: "command_start", id: cid, command, auto: safe || this.cmdMode === "auto" });
+      this.emit({
+        type: "command_start",
+        id: cid,
+        command,
+        auto: safe || (this.cmdMode === "auto" && !mustApprove),
+      });
 
     // The banner's chip for this command. It gets its own controller: a ✕ up there has to
     // kill the shell without killing the turn that is waiting for it, while the turn's own
@@ -488,7 +549,13 @@ export class Tools {
    * UI's: with `LOCALE=en` and "tra cinque minuti il saluto finale" the ring must read
    * «Il Saluto finale è scaduto.», never "The Saluto finale has expired."
    */
-  async call(name: string, argsJson: string, signal?: AbortSignal, langHint = ""): Promise<string> {
+  async call(
+    name: string,
+    argsJson: string,
+    signal?: AbortSignal,
+    langHint = "",
+    opts: CallOptions = {},
+  ): Promise<string> {
     // A malformed JSON blob is the *model's* mistake: say so instead of quietly
     // proceeding with empty args — which for a typo'd set_timer used to mean a silent,
     // invented 60 s "timer". (An empty string is the normal "no args".)
@@ -513,7 +580,10 @@ export class Tools {
       return t(this.locale, "date.full", { date, time });
     }
     if (name === "set_timer") {
-      const secs = Math.max(1, Number(args.seconds ?? 60) || 60);
+      const raw = Number(args.seconds ?? 60);
+      if (!Number.isFinite(raw) || raw <= 0 || raw > MAX_TIMER_S)
+        return t(this.locale, "timer.badSeconds", { max: MAX_TIMER_S });
+      const secs = Math.max(1, Math.trunc(raw));
       const label = String(args.label ?? "") || "timer";
       // the model may name the language outright (`lang`), else it is read off the request
       // and off the label — the user's own words — falling back to the session's locale
@@ -594,7 +664,12 @@ export class Tools {
       return body;
     }
     if (name === "run_command") {
-      return await this.runCommand(String(args.command ?? ""), String(args.reason ?? ""), signal);
+      return await this.runCommand(
+        String(args.command ?? ""),
+        String(args.reason ?? ""),
+        signal,
+        opts.forceApproval === true,
+      );
     }
     return t(this.locale, "tool.unknown", { name });
   }
@@ -733,7 +808,9 @@ export class Tools {
     if (!command) return t(this.locale, "watch.none");
     if (this.cmdMode === "off") return t(this.locale, "cmd.disabled");
     const raw = Number(args.every ?? 60);
-    const everyS = Math.max(this.minWatchS, Math.trunc(Number.isFinite(raw) && raw > 0 ? raw : 60));
+    if (!Number.isFinite(raw) || raw < this.minWatchS || raw > MAX_WATCH_S)
+      return t(this.locale, "watch.badEvery", { min: this.minWatchS, max: MAX_WATCH_S });
+    const everyS = Math.trunc(raw);
     const label = String(args.label ?? "").trim() || command;
     const match = String(args.match ?? "").trim();
     // its checks speak later, out of any turn: the language of the request that asked
@@ -744,7 +821,20 @@ export class Tools {
     // (there is no one to ask on the later ticks either), "ask" prompts just below.
     if (this.cmdMode === "auto" && !safe && isSensitiveCommand(command))
       return t(this.locale, "cmd.sensitive");
-    if (this.cmdMode !== "auto" && !safe) {
+    // A watch repeats: root escalation or an irreversible command here is worse than a
+    // single run, so the same P0.4 classes are confirmed (and fail closed without an
+    // approver) even in `auto`.
+    const privileged = isPrivilegedCommand(command);
+    const destructive = isDestructiveCommand(command);
+    if (privileged || destructive) {
+      const why = privileged
+        ? t(this.locale, "cmd.whyPrivileged")
+        : t(this.locale, "cmd.whyDestructive");
+      const ok = this.approve
+        ? await this.approve(command, `watch, every ${everyS}s — ${why}`)
+        : false;
+      if (!ok) return t(this.locale, "cmd.denied");
+    } else if (this.cmdMode !== "auto" && !safe) {
       const ok = this.approve ? await this.approve(command, `watch, every ${everyS}s`) : false;
       if (!ok) return t(this.locale, "cmd.denied");
     }
@@ -758,35 +848,45 @@ export class Tools {
       dueAt: Date.now(),
       ctl: new AbortController(),
       timer: null,
+      running: false,
       locale: loc,
     });
-    this.watchTick(id); // the first check, now — it also books the second one
+    this.watchTick(id); // the first check, now — it books the next one when it ends
     return t(loc, "watch.started", { label, s: everyS });
   }
 
   /**
-   * One check is due. The next tick is booked from *here* and not from the end of the
-   * check, so a slow check shortens the gap instead of stretching the interval — and the
-   * banner is always counting down to a moment that is already taken.
+   * One check is due. There is never more than one in flight: the next tick is booked from
+   * the `finally` of the *check*, not from here, so a slow command cannot stack checks on
+   * top of each other (the old code booked the next tick first and replaced `watch.ctl`,
+   * which left older checks running and able to announce after a stop).
    */
   private watchTick(id: string): void {
     const watch = this.watches.get(id);
-    if (!watch) return;
-    const everyMs = Math.max(50, watch.everyS * 1000); // a 0-interval may never spin
-    watch.dueAt = Date.now() + everyMs;
-    watch.timer = setTimeout(() => this.watchTick(id), everyMs);
-    watch.ctl = new AbortController(); // every check can be killed on its own
+    if (!watch || watch.running) return;
+    watch.timer = null;
+    watch.running = true;
+    const ctl = new AbortController();
+    watch.ctl = ctl; // the controller of *this* check: dropWatch aborts exactly it
+    watch.dueAt = Date.now() + Math.max(50, watch.everyS * 1000);
     this.emitTasks();
-    void this.watchCheck(id, watch);
+    void this.watchCheck(id, watch, ctl).finally(() => {
+      if (this.watches.get(id) !== watch) return; // stopped while it ran
+      watch.running = false;
+      const everyMs = Math.max(50, watch.everyS * 1000);
+      watch.dueAt = Date.now() + everyMs;
+      watch.timer = setTimeout(() => this.watchTick(id), everyMs);
+      this.emitTasks();
+    });
   }
 
   /** One check: run it, read it, tell the user when there is something to tell. */
-  private async watchCheck(id: string, watch: WatchTask): Promise<void> {
+  private async watchCheck(id: string, watch: WatchTask, ctl: AbortController): Promise<void> {
     let output = "";
     try {
       const r = await runShell(watch.command, {
         timeoutS: this.cmdTimeoutS,
-        signal: watch.ctl.signal,
+        signal: ctl.signal,
       });
       output = r.output;
       this.log?.(`🔎 watch «${watch.label}» → exit ${r.rc}${r.timedOut ? " (timeout)" : ""}`);
@@ -872,5 +972,8 @@ export class Tools {
       watch.ctl.abort();
     }
     this.watches.clear();
+    // a standalone shutdown must not leave a shell (or its process group) behind
+    for (const cmd of this.commands.values()) cmd.ctl.abort();
+    this.commands.clear();
   }
 }

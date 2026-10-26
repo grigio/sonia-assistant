@@ -113,11 +113,26 @@ export class LLM {
       this.pi.exe(); // throws when pi is not installed / not in PATH
       return await this.pi.modelIds(force);
     }
-    const r = await fetch(`${this.base}/models`, {
-      headers: this.headers(),
-      signal: AbortSignal.timeout(10_000),
-    });
-    const js = (await r.json()) as { data?: { id?: string }[] };
+    let r: Response;
+    try {
+      r = await fetch(`${this.base}/models`, {
+        headers: this.headers(),
+        signal: AbortSignal.timeout(10_000),
+      });
+    } catch (e) {
+      throw new Error(
+        `LLM ${this.base}: models did not answer in 10 s (${e instanceof Error ? e.message : e})`,
+      );
+    }
+    // a 401/500 used to look like an empty model list: without this the harness started
+    // "fine" against a broken leg and only failed later, on the first real request
+    if (!r.ok) throw new Error(`LLM ${this.base}: models HTTP ${r.status}`);
+    let js: { data?: { id?: string }[] };
+    try {
+      js = (await r.json()) as { data?: { id?: string }[] };
+    } catch {
+      throw new Error(`LLM ${this.base}: models returned unparsable JSON`);
+    }
     this.ctxById = contextsFromServerModels(js); // n_ctx for the context bar (no model is loaded by asking)
     return (js.data ?? []).map((m) => m.id ?? "");
   }
@@ -352,6 +367,7 @@ export class LLM {
     proposed: { name: string; description: string; args?: string }[],
     skills = "",
     doing: string[] = [],
+    signal?: AbortSignal,
   ): Promise<Set<number>> {
     const list = proposed
       .map((p, i) => `${i + 1}. ${p.name}${p.args ? ` ${p.args}` : ""} — ${p.description}`)
@@ -378,7 +394,9 @@ export class LLM {
       max_tokens: 16,
       temperature: 0,
     };
-    const r = await this.post("tool-gate", this.judgeBase, body, 15_000);
+    // `signal` is the response's own controller: a barge-in (or a ✕) aborts the judge
+    // too, instead of the turn waiting out its full 15 s after the user stopped it
+    const r = await this.post("tool-gate", this.judgeBase, body, 15_000, signal);
     const js = (await r.json()) as {
       choices?: { message?: { content?: string | null } }[];
     };

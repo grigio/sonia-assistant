@@ -70,6 +70,30 @@ export function appendCapped(cur: string, chunk: string, max: number): string {
 }
 
 /**
+ * The chunk-array version of `appendCapped`: appends are O(chunk) — nothing copies the
+ * accumulated output — and only `text()` pays one join. Use it where a command streams
+ * thousands of chunks into the cap (the run loop of `run_command`); the plain string
+ * append is fine for a handful.
+ */
+export class CappedBuffer {
+  private parts: string[] = [];
+  private len = 0;
+  constructor(private readonly max: number) {}
+  add(chunk: string): void {
+    if (!chunk) return;
+    this.parts.push(chunk);
+    this.len += chunk.length;
+    while (this.len - this.parts[0]!.length >= this.max) {
+      this.len -= this.parts.shift()!.length; // whole chunks from the front: no copies
+    }
+  }
+  text(): string {
+    const s = this.parts.join("");
+    return s.length > this.max ? s.slice(s.length - this.max) : s;
+  }
+}
+
+/**
  * Crash-safe JSON write: the payload goes to `<file>.tmp` in the same directory and one
  * `rename` swaps it over the target, so a crash mid-write leaves the *previous* file on
  * disk instead of a torn JSON. The pattern `ChatStore.save` established for `chat.json`;

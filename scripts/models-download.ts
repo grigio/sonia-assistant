@@ -1,12 +1,19 @@
 #!/usr/bin/env bun
+import { createHash } from "node:crypto";
 import { once } from "node:events";
 /**
  * `bun run models-download` — the model files this configuration needs, checked and fetched.
  *
  *   bun run models-download                 download whatever is missing (idempotent, resumable)
- *   bun run models-download --check         only verify: ✓/✗ per file, exit 1 if anything is missing
+ *   bun run models-download --check         only verify presence/size: ✓/✗ per file, exit 1 if anything is missing
+ *   bun run models-download --verify        check size *and* SHA-256 (slower: hashes every file)
  *   bun run models-download --only vad      just one package: asr | tts | turn | vad
  *   bun run models-download -h | --help
+ *
+ * Downloads are pinned: the HF revision is a commit (never `main`), the Silero file comes
+ * from a commit in its repo, and every completed download is checked against the SHA-256
+ * in `models-manifest.json` before it is renamed into place. A file with no manifest entry
+ * is not downloaded at all — see the top of this script to bump the revision.
  *
  * `--only vad` fetches the 2.3 MB Silero file alone — everything the hermetic test suite
  * needs, without the ~3.3 GiB of speech models the servers do.
@@ -26,11 +33,23 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { Config, ROOT } from "../src/config";
+import { Config, ROOT, TTS_LANGS } from "../src/config";
 
-const HF = "https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/main";
-const SILERO =
-  "https://github.com/snakers4/silero-vad/raw/master/src/silero_vad/data/silero_vad.onnx";
+/**
+ * Everything is fetched from an immutable revision and checked against
+ * `models-manifest.json` (size + SHA-256, taken from the HF tree at that revision).
+ * Bumping a revision means regenerating the manifest: the script fails closed if a
+ * configured file has no manifest entry.
+ */
+const HF_REVISION = "462b4cec041e06ffb3d8fcf0d8c655051b1cd9f5";
+const HF = `https://huggingface.co/audio-cpp/audio.cpp-gguf/resolve/${HF_REVISION}`;
+const SILERO_REVISION = "066409f3d9db45a30d21dfcbf9147826ffdd7052";
+const SILERO = `https://raw.githubusercontent.com/snakers4/silero-vad/${SILERO_REVISION}/src/silero_vad/data/silero_vad.onnx`;
+
+type ManifestEntry = { size: number; sha256: string };
+const MANIFEST: Record<string, ManifestEntry> = JSON.parse(
+  fs.readFileSync(fileURLToPath(new URL("./models-manifest.json", import.meta.url)), "utf8"),
+);
 
 /** The voices of a Pocket TTS pack (`…/<lang>/embeddings/<voice>.safetensors`) — the same
  *  26 ids ship in every language pack, so one list serves `TTS_LANG=italian|english|…`. */
@@ -65,8 +84,16 @@ const VOICES = [
 
 /** One file to have on disk. `url` absent → checkable but not fetchable (say why in `note`).
  *  `pkg` is what `--only <pkg>` selects on — the one file a hermetic test suite needs is
- *  `vad` (2.3 MB), the whole download is ~3.3 GiB. */
-type ModelFile = { path: string; url?: string; note?: string; pkg: Pkg };
+ *  `vad` (2.3 MB), the whole download is ~3.3 GiB. `size`/`sha256` come from the pinned
+ *  manifest; a URL without one is a bug, not a download to attempt blind. */
+type ModelFile = {
+  path: string;
+  url?: string;
+  note?: string;
+  pkg: Pkg;
+  size?: number;
+  sha256?: string;
+};
 
 /** The selectable groups of `--only` (`bun run models-download --only vad`). */
 type Pkg = "asr" | "tts" | "turn" | "vad";
@@ -75,8 +102,8 @@ const PKGS: Pkg[] = ["asr", "tts", "turn", "vad"];
 /** A plan entry nothing can be fetched for (`ASR_MODEL=…`) — same `pkg` as the files. */
 type Skip = { pkg: Pkg; msg: string };
 
-/** The Pocket TTS packs published under `PocketTTS-GGUF/<lang>/` on the HF repo. */
-const TTS_LANGS = ["english", "german", "italian", "portuguese", "spanish"];
+/** The Pocket TTS packs published under `PocketTTS-GGUF/<lang>/` on the HF repo: the
+ *  same list `Config` validates `TTS_LANG` against (no second copy to drift). */
 
 /** The Voxtral packages published under `Voxtral-Mini-4B-Realtime-2602-GGUF/` (`ASR_PRECISION`). */
 const ASR_PRECISIONS = ["q4_k", "q8_0", "bf16"];
@@ -120,6 +147,29 @@ function human(n: number): string {
   return `${num} ${units[i]}`;
 }
 
+/** SHA-256, streamed: a 3 GiB ASR pack must never be read into memory. */
+function sha256File(file: string): string {
+  const h = createHash("sha256");
+  const fd = fs.openSync(file, "r");
+  const buf = Buffer.allocUnsafe(1 << 20);
+  try {
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, buf.length, null);
+      if (n === 0) break;
+      h.update(buf.subarray(0, n));
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return h.digest("hex");
+}
+
+/** The manifest entry for a URL/repo path, or nothing when nobody pinned it. */
+function pinned(key: string): Pick<ModelFile, "size" | "sha256"> {
+  const e = MANIFEST[key];
+  return e ? { size: e.size, sha256: e.sha256 } : {};
+}
+
 /**
  * The files this configuration needs. A `*_GGUF` override only moves the target: its
  * download URL is kept just when the path is still the default one, so a hand-picked
@@ -134,8 +184,10 @@ function plan(cfg: Config): { files: ModelFile[]; skipped: Skip[]; modelsDir: st
   /** `key` is the env var that moved the target (ASR_GGUF / TTS_GGUF / TURN_GGUF). */
   const add = (pkg: Pkg, key: string, override: string | undefined, def: string, url: string) => {
     const target = override ? abs(override) : def;
-    if (path.resolve(target) === path.resolve(def)) files.push({ path: target, url, pkg });
-    else
+    if (path.resolve(target) === path.resolve(def)) {
+      const repoPath = url.startsWith(`${HF}/`) ? url.slice(HF.length + 1) : url;
+      files.push({ path: target, url, pkg, ...pinned(repoPath) });
+    } else
       files.push({
         path: target,
         pkg,
@@ -177,7 +229,7 @@ function plan(cfg: Config): { files: ModelFile[]; skipped: Skip[]; modelsDir: st
       "tts",
       `TTS_MODEL=${cfg.ttsModel} — no download source known for it (add one in scripts/models-download.ts)`,
     );
-  } else if (!TTS_LANGS.includes(lang)) {
+  } else if (!TTS_LANGS.some((l) => l === lang)) {
     skip(
       "tts",
       `TTS_LANG=${cfg.ttsLang} — not a published Pocket TTS pack (known: ${TTS_LANGS.join(" | ")})`,
@@ -200,6 +252,7 @@ function plan(cfg: Config): { files: ModelFile[]; skipped: Skip[]; modelsDir: st
           path: path.join(voicesDir, `${v}.safetensors`),
           pkg: "tts",
           url: `${HF}/PocketTTS-GGUF/${lang}/embeddings/${v}.safetensors`,
+          ...pinned(`PocketTTS-GGUF/${lang}/embeddings/${v}.safetensors`),
         });
       }
       if (!VOICES.includes(cfg.ttsVoice)) {
@@ -236,13 +289,19 @@ function plan(cfg: Config): { files: ModelFile[]; skipped: Skip[]; modelsDir: st
   }
 
   // VAD — Silero v5, ONNX, in-process (always needed, whatever the servers do)
-  files.push({ path: abs(cfg.vadModel), url: SILERO, pkg: "vad" });
+  files.push({ path: abs(cfg.vadModel), url: SILERO, pkg: "vad", ...pinned("silero_vad.onnx") });
 
   return { files, skipped, modelsDir };
 }
 
-/** ✓/✗ per file. Returns 1 when something is missing. */
-function check(files: ModelFile[], skipped: Skip[], modelsDir: string, mode: Mode): number {
+/** ✓/✗ per file. Returns 1 when something is missing or fails `--verify`. */
+function check(
+  files: ModelFile[],
+  skipped: Skip[],
+  modelsDir: string,
+  mode: Mode,
+  deep = false,
+): number {
   let missing = 0;
   let onDisk = 0;
   const label = (f: ModelFile) => rel(f.path).padEnd(84);
@@ -250,6 +309,24 @@ function check(files: ModelFile[], skipped: Skip[], modelsDir: string, mode: Mod
   for (const f of files) {
     const size = sizeOf(f.path);
     if (size !== null) {
+      // A truncated file with the right name is the failure a size check catches for free.
+      if (f.size !== undefined && size !== f.size) {
+        console.log(
+          `${red("✗")} ${label(f)} ${dim(`wrong size ${size} B — expected ${f.size} B (${human(f.size)})`)}`,
+        );
+        missing++;
+        continue;
+      }
+      if (deep && f.sha256) {
+        const got = sha256File(f.path);
+        if (got !== f.sha256) {
+          console.log(
+            `${red("✗")} ${label(f)} ${dim(`SHA-256 ${got.slice(0, 12)}… — expected ${f.sha256.slice(0, 12)}…`)}`,
+          );
+          missing++;
+          continue;
+        }
+      }
       onDisk += size;
       console.log(`${green("✓")} ${label(f)} ${dim(human(size))}`);
       continue;
@@ -357,9 +434,18 @@ async function download(files: ModelFile[], modelsDir: string): Promise<number> 
   let fetched = 0;
 
   for (const f of files) {
-    if (sizeOf(f.path) !== null) {
-      console.log(`${green("✓")} ${rel(f.path)}`);
-      continue;
+    const size = sizeOf(f.path);
+    if (size !== null) {
+      if (f.size !== undefined && size !== f.size) {
+        // keep a wrong-sized file around only long enough to say why it goes
+        console.log(
+          `${yellow("!")} ${rel(f.path)} ${dim(`wrong size ${size} B — fetching ${f.size} B`)}`,
+        );
+        fs.rmSync(f.path, { force: true });
+      } else {
+        console.log(`${green("✓")} ${rel(f.path)}`);
+        continue;
+      }
     }
     if (!f.url) {
       console.log(
@@ -368,11 +454,27 @@ async function download(files: ModelFile[], modelsDir: string): Promise<number> 
       failed++;
       continue;
     }
+    if (!f.sha256) {
+      // fail closed: a URL without a pinned checksum is exactly the mutable download this
+      // script no longer does (add it to models-manifest.json, at a pinned revision)
+      console.log(
+        `${red("✗")} ${rel(f.path)} ${dim("no checksum in models-manifest.json — refusing an unpinned download")}`,
+      );
+      failed++;
+      continue;
+    }
     console.log(`${yellow("↓")} ${rel(f.path)}`);
     try {
       const bytes = await fetchInto(f);
+      const got = sha256File(f.path);
+      if (got !== f.sha256) {
+        fs.rmSync(f.path, { force: true }); // corrupt → not a model, never resume from it
+        throw new Error(
+          `SHA-256 ${got.slice(0, 12)}… ≠ ${f.sha256.slice(0, 12)}… — file removed, next run starts clean`,
+        );
+      }
       fetched++;
-      console.log(`  ${dim(`→ ${human(bytes)}`)}`);
+      console.log(`  ${dim(`→ ${human(bytes)} (sha256 ok)`)}`);
     } catch (err) {
       failed++;
       const reason = err instanceof Error ? err.message : String(err);
@@ -405,12 +507,16 @@ type Mode = "download" | "check";
 
 async function main(): Promise<number> {
   let mode: Mode = "download";
+  let deep = false;
   let only: Pkg | null = null;
   const args = process.argv.slice(2);
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]!;
     if (arg === "--check" || arg === "check") mode = "check";
-    else if (arg === "-h" || arg === "--help") {
+    else if (arg === "--verify") {
+      mode = "check";
+      deep = true; // hash every file, not just its size
+    } else if (arg === "-h" || arg === "--help") {
       usage();
       return 0;
     } else if (arg === "--only" || arg.startsWith("--only=")) {
@@ -434,7 +540,7 @@ async function main(): Promise<number> {
   const chosen = only ? files.filter((f) => f.pkg === only) : files;
   const chosenSkips = only ? skipped.filter((s) => s.pkg === only) : skipped;
   if (only) console.log(dim(`--only ${only}: ${chosen.length} of ${files.length} file(s)`));
-  if (mode === "check") return check(chosen, chosenSkips, modelsDir, mode);
+  if (mode === "check") return check(chosen, chosenSkips, modelsDir, mode, deep);
 
   const failed = await download(chosen, modelsDir);
   const missing = check(chosen, chosenSkips, modelsDir, mode);

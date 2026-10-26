@@ -165,6 +165,8 @@ describe("a response cut mid-exchange", () => {
       tFirstToken: null,
       denied: new Map(),
       gateAllowed: new Set(),
+      gateFailed: false,
+      tainted: false,
     };
   };
 
@@ -254,5 +256,24 @@ describe("message bookkeeping", () => {
     const req = requests.at(-1)!;
     expect(req.some((m) => m.content?.startsWith("vecchia"))).toBe(false);
     expect(req.at(-1)!.content).toBe("ultima"); // the turn being answered is always in
+  });
+
+  test("a huge tool result in the current turn is truncated, not left to overflow", () => {
+    const { a } = scripted([]);
+    a.contextTotal = 60; // → a 6000-char budget
+    a.history = [
+      { role: "user", content: "ultima" },
+      { role: "assistant", content: null, tool_calls: [call("c1")] },
+      { role: "tool", tool_call_id: "c1", content: `HEAD${"x".repeat(20_000)}TAIL` },
+    ];
+    (a as unknown as { fitHistory: () => void }).fitHistory();
+
+    const tool = a.history.find((m) => m.role === "tool")!;
+    const body = String(tool.content);
+    expect(body.length).toBeLessThan(10_000); // whole old turns are gone, this had to shrink
+    expect(tool.tool_call_id).toBe("c1");
+    expect(body.startsWith("HEAD")).toBe(true);
+    expect(body.endsWith("TAIL")).toBe(true);
+    expect(body).toContain("troncato");
   });
 });

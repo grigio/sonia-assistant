@@ -122,9 +122,16 @@ const checks: Check[] = [
     url: harnessUrl,
     hint: "bun run start",
     probe: async () => {
-      const { status } = await get(harnessUrl);
+      // GET /health (not the page): the JSON says the harness is *alive* — mic, services,
+      // model — where a TCP connect or a 200 on `/` would accept a wedged one too.
+      const { status, json } = await get(`${harnessUrl}health`);
       if (status !== 200) throw new Error(`HTTP ${status}`);
-      return "web UI";
+      if (json === null) return "web UI (no health JSON — old harness?)";
+      const down = Array.isArray(json.services_down) ? (json.services_down as string[]) : [];
+      if (json.ok === false) throw new Error(`degraded: services down (${down.join(", ") || "?"})`);
+      const state = typeof json.state === "string" ? `, state ${json.state}` : "";
+      const model = typeof json.model === "string" ? `, model ${json.model}` : "";
+      return `alive${state}${model}`;
     },
   },
 ];

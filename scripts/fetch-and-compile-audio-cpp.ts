@@ -1,19 +1,21 @@
 #!/usr/bin/env bun
 import { spawnSync } from "node:child_process";
 /**
- * `bun run fetch-and-compile-audio.cpp` — fetch the latest audio.cpp **release** and
+ * `bun run fetch-and-compile-audio.cpp` — fetch a pinned audio.cpp **release** and
  * compile `audiocpp_server` from its source (the official prebuilt binaries are built
  * with `-march=native` on AVX-512 CI runners and SIGILL on CPUs without AVX-512 — see
  * the "Why compile" note in README.md; fetching source, not a release asset, is the point).
  *
- *   bun run fetch-and-compile-audio.cpp               clone/update `vendor/audio.cpp` to the newest release and build it
- *   bun run fetch-and-compile-audio.cpp --tag v0.9.1  … pin one release instead of "latest"
+ *   bun run fetch-and-compile-audio.cpp               clone/update `vendor/audio.cpp` to the verified tag and build it
+ *   bun run fetch-and-compile-audio.cpp --tag v0.9.1  … pin another release (explicit, but unverified)
+ *   bun run fetch-and-compile-audio.cpp --latest      … use the newest release (mutable: no commit pin)
  *   bun run fetch-and-compile-audio.cpp -h | --help
  *
  * What it does, in order:
- *   1. resolve the newest tag from the GitHub releases API (fallback: `git ls-remote --tags`)
+ *   1. resolve the tag: PINNED_TAG by default (or `--tag`, or the newest release with `--latest`)
  *   2. clone `vendor/audio.cpp` at that tag, or `git fetch` + check it out when it exists
  *      (a dirty checkout is refused, nothing is stashed or discarded behind your back)
+ *      — the pinned tag's commit is verified against PINNED_COMMIT, so a moved tag fails
  *   3. `cmake` configure + build the `audiocpp_server` target (incremental on re-runs)
  *   4. verify `vendor/audio.cpp/build/bin/audiocpp_server` and say how to start it
  *
@@ -32,6 +34,9 @@ import path from "node:path";
 
 const ROOT = path.resolve(import.meta.dir, "..");
 const REPO = "https://github.com/0xShug0/audio.cpp";
+/** The release this repo is built and tested against, and the commit it must resolve to. */
+const PINNED_TAG = "v0.9.2";
+const PINNED_COMMIT = "0097d365a00b52a6991ad7618f0a04e8d2935e47";
 const VENDOR = path.join(ROOT, "vendor", "audio.cpp");
 const BUILD = path.join(VENDOR, "build");
 const BIN = path.join(BUILD, "bin", "audiocpp_server");
@@ -123,6 +128,7 @@ function fetchSource(tag: string): void {
     info(`cloning ${REPO} @ ${tag} → ${path.relative(ROOT, VENDOR)} ${dim("(shallow)")}`);
     const r = run(["git", "clone", "--depth", "1", "--branch", tag, REPO, VENDOR]);
     if (!r.ok) die(`clone failed — is "${tag}" a real tag? (${r.out})`);
+    verifyPinned(tag);
     return;
   }
   if (!fs.existsSync(path.join(VENDOR, ".git")))
@@ -143,6 +149,7 @@ function fetchSource(tag: string): void {
   const want = run(["git", "-C", VENDOR, "rev-parse", `${tag}^{commit}`], true).out.trim();
   if (head === want) {
     info(`source already at ${green(tag)}`);
+    verifyPinned(tag);
     return;
   }
 
@@ -162,6 +169,25 @@ function fetchSource(tag: string): void {
   if (!c.ok) die(`checkout ${tag} failed: ${c.out}`);
   const now = run(["git", "-C", VENDOR, "describe", "--tags", "--exact-match"], true).out.trim();
   info(`source at ${green(now || tag)}`);
+  verifyPinned(tag);
+}
+
+/**
+ * A tag name is not immutable: when it is the one this repo ships against, its commit is
+ * what gets verified. A moved upstream tag is a supply-chain event — refuse to build it.
+ */
+function verifyPinned(tag: string): void {
+  if (tag !== PINNED_TAG) {
+    warn(`tag ${tag} is not the verified release (${PINNED_TAG}) — no commit check`);
+    return;
+  }
+  const head = run(["git", "-C", VENDOR, "rev-parse", "HEAD"], true).out.trim();
+  if (head !== PINNED_COMMIT)
+    die(
+      `${PINNED_TAG} resolves to ${head.slice(0, 8)} but ${PINNED_COMMIT.slice(0, 8)} was verified — ` +
+        `the upstream tag moved; nothing was built`,
+    );
+  info(`commit ${dim(head.slice(0, 8))} matches the pinned release`);
 }
 
 /** Vulkan: honor AUDIOCPP_VULKAN, else auto-detect headers + `glslc`. */
@@ -227,16 +253,19 @@ function usage(): void {
 
 async function main(): Promise<number> {
   let tag: string | undefined;
+  let latest = false;
   const args = process.argv.slice(2);
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (a === "-h" || a === "--help") {
       usage();
       return 0;
+    } else if (a === "--latest") {
+      latest = true;
     } else if (a === "--tag") {
       tag = args[++i];
       if (!tag || tag.startsWith("-")) {
-        console.error("--tag needs a value (e.g. --tag v0.9.1)");
+        console.error("--tag needs a value (e.g. --tag v0.9.2)");
         return 2;
       }
     } else if (a.startsWith("--tag=")) {
@@ -246,9 +275,18 @@ async function main(): Promise<number> {
       return 2;
     }
   }
+  if (tag && latest) {
+    console.error("--tag and --latest are mutually exclusive");
+    return 2;
+  }
 
   const t0 = Date.now();
-  tag ??= await latestTag();
+  if (latest) {
+    tag = await latestTag();
+    warn(`--latest: tracking a mutable release (${tag}) — no commit pin`);
+  } else {
+    tag ??= PINNED_TAG;
+  }
   info(`release: ${green(tag)}`);
   fetchSource(tag);
 

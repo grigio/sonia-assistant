@@ -23,7 +23,6 @@
 
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import net from "node:net";
 import path from "node:path";
 import { SoniaApp } from "./app";
 import { fixLowCaptureVolume } from "./audio";
@@ -75,20 +74,20 @@ export function ecNodesPresent(): boolean {
 }
 
 // Preflight: the client is only a window — it never starts the backends itself.
-// The harness serves no health route, so just check that something listens there.
-function portOpen(host: string, port: number): Promise<boolean> {
-  return new Promise((res) => {
-    const s = net.connect({ host, port });
-    s.once("connect", () => s.end(() => res(true)));
-    s.once("error", () => res(false));
-    setTimeout(() => s.destroy(), 2000).unref();
-  });
+// `GET /health` is answered by the harness itself (JSON: state, mic, services): a TCP
+// connect alone cannot tell a listening-but-wedged harness from a working one.
+function harnessAlive(url: string): Promise<boolean> {
+  return fetch(new URL("health", url.endsWith("/") ? url : `${url}/`), {
+    signal: AbortSignal.timeout(3000),
+  })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((js: unknown) => js !== null && typeof js === "object")
+    .catch(() => false);
 }
 
 const harnessUrl = process.env.HARNESS_URL ?? "http://127.0.0.1:8095";
 {
-  const u = new URL(harnessUrl.includes("://") ? harnessUrl : `http://${harnessUrl}`);
-  if (!(await portOpen(u.hostname, Number(u.port || 8095)))) {
+  if (!(await harnessAlive(harnessUrl))) {
     console.error(
       `No harness answering at ${harnessUrl} — start the backends first:\n` +
         `  bun run start        # llama-server + audio.cpp servers + harness, no Chromium\n` +

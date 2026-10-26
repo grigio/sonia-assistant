@@ -57,6 +57,7 @@ function scripted(
   verdict: (call: JudgeCall) => Set<number> = () => new Set(),
 ): {
   a: Assistant;
+  tmp: string;
   judges: JudgeCall[];
   logs: string[];
   results: string[]; // the `content` of every tool result, in order
@@ -137,7 +138,7 @@ function scripted(
     endSegment: () => {},
     enqueue: () => {},
   };
-  return { a, judges, logs, results, payloads };
+  return { a, tmp, judges, logs, results, payloads };
 }
 
 /** The 11:35:48 round: a skill named only through its spoken approximation. */
@@ -368,5 +369,110 @@ describe("the tool gate — one tool, one decision per turn", () => {
     expect(results[1]).toContain("already in the messages above");
     expect(results[2]).toBe(gated); // run_command: first appearance, denied
     expect(results[3]).toContain("dopo"); // identical retry → the ↻ rule runs it
+  });
+});
+
+describe("P0.4 — the gate is not the security boundary", () => {
+  test("a judge failure forces approval for a mutating call (no approver → denied)", async () => {
+    const { a, tmp, results, logs } = scripted(
+      [run(`touch ${path.join(os.tmpdir(), "never-created")}`), { text: "Fatto." }],
+      () => {
+        throw new Error("judge offline");
+      },
+    );
+    // no approve callback: the fail-closed path must not fall through to auto
+    a.tools = new Tools({
+      dataDir: path.join(tmp, "data-fail"),
+      announce: () => {},
+      cmdMode: "auto",
+    });
+
+    a.startResponse("fai qualcosa", Date.now());
+    await a.resp?.task;
+
+    expect(results[0]).toBe(t("it", "cmd.denied"));
+    expect(logs.some((l) => l.includes("mutating tool calls will require approval"))).toBe(true);
+  });
+
+  test("a judge failure plus an approver runs the call only after the yes", async () => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), "fd-p04-gate-"));
+    const { a, results } = scripted(
+      [run(`touch ${work}/gate-approved`), { text: "Fatto." }],
+      () => {
+        throw new Error("judge offline");
+      },
+    );
+    let approvals = 0;
+    a.tools = new Tools({
+      dataDir: work,
+      announce: () => {},
+      cmdMode: "auto",
+      approve: async () => {
+        approvals++;
+        return true;
+      },
+    });
+
+    a.startResponse("fai qualcosa", Date.now());
+    await a.resp?.task;
+
+    expect(approvals).toBe(1);
+    expect(results[0]).toContain("exit code 0");
+    expect(fs.existsSync(path.join(work, "gate-approved"))).toBe(true);
+    fs.rmSync(work, { recursive: true, force: true });
+  });
+
+  test("shell output taints the turn: the next mutating call is confirmed", async () => {
+    const work = fs.mkdtempSync(path.join(os.tmpdir(), "fd-p04-taint-"));
+    const { a, results } = scripted(
+      [run("echo fetched-page"), run(`touch ${work}/after-fetch`), { text: "Fatto." }],
+      () => new Set([0]),
+    );
+    const asked: string[] = [];
+    a.tools = new Tools({
+      dataDir: work,
+      announce: () => {},
+      cmdMode: "auto",
+      approve: async (cmd) => {
+        asked.push(cmd);
+        return false;
+      },
+    });
+
+    a.startResponse("leggi la pagina", Date.now());
+    await a.resp?.task;
+
+    expect(results[0]).toContain("fetched-page");
+    expect(results[1]).toBe(t("it", "cmd.denied"));
+    expect(asked).toEqual([`touch ${work}/after-fetch`]);
+    expect(fs.existsSync(path.join(work, "after-fetch"))).toBe(false);
+    fs.rmSync(work, { recursive: true, force: true });
+  });
+
+  test("a strict read-only command stays unattended after the turn is tainted", async () => {
+    const clean = path.join(os.tmpdir(), `fd-taint-clean-${process.pid}.txt`);
+    fs.writeFileSync(clean, "hello\n");
+    afterAll(() => fs.rmSync(clean, { force: true }));
+
+    const { a, tmp, results } = scripted(
+      [run("echo fetched-page"), run(`cat ${clean}`), { text: "Fatto." }],
+      () => new Set([0]),
+    );
+    let approvals = 0;
+    a.tools = new Tools({
+      dataDir: path.join(tmp, "data-read"),
+      announce: () => {},
+      cmdMode: "auto",
+      approve: async () => {
+        approvals++;
+        return false;
+      },
+    });
+
+    a.startResponse("leggi la pagina", Date.now());
+    await a.resp?.task;
+
+    expect(approvals).toBe(0);
+    expect(results[1]).toContain("hello");
   });
 });

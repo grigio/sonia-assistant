@@ -103,6 +103,35 @@ describe("Player pacing", () => {
     expect(events).toEqual([]); // no start:vuoto, no idle (was never busy)
     await p.close();
   });
+
+  test("a burst of tiny TTS deltas is queued as chunks, not re-concatenated", async () => {
+    const p = new Player(16000, "", 0, "callback");
+    p.paused = true; // park the queue: we are testing storage, not pacing
+    await p.start();
+    p.beginSegment("molto lunga");
+    for (let i = 0; i < 2000; i++) p.enqueue(Uint8Array.from([i & 0xff]));
+    p.endSegment();
+    const seg = p.queue[0] as unknown as { chunks: Uint8Array[]; length: number };
+    expect(seg.chunks).toHaveLength(2000); // the old merge copied the whole tail every delta
+    expect(seg.length).toBe(2000);
+    p.flush();
+    await p.close();
+  });
+
+  test("ragged chunks come out byte-for-byte in order", async () => {
+    const p = new Player(16000, "", 0, "callback");
+    const sent: number[] = [];
+    p.writer = (pcm) => sent.push(...pcm);
+    await p.start();
+    p.beginSegment("x");
+    for (const part of [[1, 2, 3], [4], [5, 6, 7, 8, 9], [10, 11]]) {
+      p.enqueue(Uint8Array.from(part));
+    }
+    p.endSegment();
+    await until(() => !p.busy, "the queue to drain");
+    await p.close();
+    expect(sent).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  });
 });
 
 describe("QueueMic", () => {
@@ -134,6 +163,17 @@ describe("QueueMic", () => {
     }
     expect(mic.droppedFrames).toBe(234);
     it.return?.(undefined);
+  });
+
+  test("close ends the frame iterator and ignores later pushes", async () => {
+    const mic = new QueueMic();
+    const it = mic.frames();
+    const waiting = it.next(); // parked on the queue, as runAudio's loop is
+    await mic.close();
+    expect((await waiting).done).toBe(true);
+
+    mic.push(new Uint8Array(FRAME_BYTES)); // late WebSocket message: must not resurrect it
+    expect((await it.next()).done).toBe(true);
   });
 });
 

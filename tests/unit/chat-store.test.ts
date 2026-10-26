@@ -171,7 +171,8 @@ describe("the conversation survives a restart", () => {
     const before = first.chatLines();
     expect(before.map((l) => l.content)).toEqual(["prima", "risposta", "seconda", "risposta"]);
 
-    // a second process: same data dir, a fresh Assistant
+    // a second process: same data dir, a fresh Assistant (the save is debounced — flush)
+    first.flushChat();
     const second = mk();
     second.restoreChat();
     const restored = second.chatLines();

@@ -53,6 +53,59 @@ export function contentTypeFor(file: string): string {
 }
 
 /**
+ * Response headers every route sends, HTML or not: a local page is still a page the
+ * browser will happily frame, sniff or hand a microphone to.
+ */
+export const SECURITY_HEADERS: Record<string, string> = {
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "no-referrer",
+  "X-Frame-Options": "DENY", // belt: `frame-ancestors` in the CSP is the braces
+  "Permissions-Policy": "microphone=(self), camera=(), geolocation=(), display-capture=()",
+};
+
+/**
+ * The page's CSP. The inline module is the only script it needs (plus the two audio
+ * worklets, which are `blob:` URLs built at runtime), so the nonce is per response and
+ * `'unsafe-inline'` is never needed for scripts. Styles stay inline: the whole UI is one
+ * `<style>` block in `static/index.html`.
+ *
+ * `host` is the request's `Host` header: the page opens its WebSocket on
+ * `location.host`, and an exact `ws://host` source is narrower than `ws:` (which would
+ * let an injected script exfiltrate to any WebSocket server).
+ */
+export function contentSecurityPolicy(nonce: string, host?: string): string {
+  const connect = ["'self'"];
+  // A Host header that is not a plain host[:port] is not trusted inside a CSP directive
+  // (a `;` there would start a new directive): then only `'self'` remains.
+  if (host && /^[A-Za-z0-9.:[\]-]+$/.test(host)) connect.push(`ws://${host}`, `wss://${host}`);
+  return [
+    "default-src 'self'",
+    `script-src 'self' 'nonce-${nonce}' blob:`, // blob: = AudioWorklet.addModule
+    "worker-src 'self' blob:",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data:",
+    "media-src 'self'",
+    "font-src 'self'",
+    `connect-src ${connect.join(" ")}`,
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'none'",
+    "frame-ancestors 'none'",
+  ].join("; ");
+}
+
+/**
+ * A ws frame is a cross-process boundary: a probe, a fuzzing client or a malformed page
+ * must never reach the harness as a command. `onCommand`'s switch further narrows each
+ * case's fields; this only asserts the shape every case relies on.
+ */
+function asClientCommand(x: unknown): ClientCommand | null {
+  if (typeof x !== "object" || x === null || Array.isArray(x)) return null;
+  const cmd = x as { type?: unknown };
+  return typeof cmd.type === "string" ? (x as ClientCommand) : null;
+}
+
+/**
  * The path of a `GET /static/<path>` request, or `null` when it must not be served.
  * `raw` is still percent-encoded (the URL is decoded here, so the tests cover it too).
  *
@@ -174,6 +227,15 @@ export class WebApp {
   private pages = new Map<Locale, { mtimeMs: number; html: string }>();
   /** The other `static/` files, same idea, capped (FIFO) so it can never grow wild. */
   private files = new Map<string, { mtimeMs: number; body: Buffer; type: string }>();
+  /** `ws.send()` only buffers: a browser that stopped reading (suspended tab, throttled
+   *  background page) would grow `bufferedAmount` without limit. Real-time speech is the
+   *  one payload where *old* is worthless — past this queue, PCM chunks are dropped. */
+  static readonly AUDIO_HIGH_WATER = 512 * 1024; // ~10 s of 24 kHz s16 audio
+  /** JSON backed up past this means events nobody will ever render: close the socket —
+   *  the reconnect's `hello` is the only way to hand the page a *current* state. */
+  static readonly JSON_HIGH_WATER = 2 * 1024 * 1024;
+  /** Dropped-chunk counter (per connection): the log line mentions it once, not per chunk. */
+  private droppedAudio = 0;
 
   /** The drawer's runtime overrides (`data/settings.json`), loaded before the Harness. */
   private readonly settings: SettingsStore;
@@ -195,6 +257,23 @@ export class WebApp {
   private send(payload: string | Uint8Array): void {
     const ws = this.ws;
     if (!ws || ws.readyState !== ws.OPEN) return;
+    if (typeof payload !== "string") {
+      if (ws.bufferedAmount > WebApp.AUDIO_HIGH_WATER) {
+        if (this.droppedAudio++ === 0)
+          this.assistant.log(
+            `🌐 browser too slow: dropping audio past ${(WebApp.AUDIO_HIGH_WATER / 1024) | 0} KiB queued`,
+          );
+        return;
+      }
+    } else if (ws.bufferedAmount > WebApp.JSON_HIGH_WATER) {
+      this.assistant.log("🌐 browser stopped reading events — closing its socket");
+      try {
+        ws.close();
+      } catch {
+        /* it is on its way out anyway */
+      }
+      return;
+    }
     try {
       ws.send(payload);
     } catch {
@@ -213,15 +292,19 @@ export class WebApp {
    *  else in the app, so there is nothing sensible to fall back to). */
   private async index(_req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     try {
-      const html = await this.indexHtml();
+      // The page is cached per locale, the nonce must not be: stamp it on the way out.
+      const nonce = crypto.randomBytes(16).toString("base64");
+      const html = (await this.indexHtml()).replaceAll("__CSP_NONCE__", nonce);
       res.writeHead(200, {
+        ...SECURITY_HEADERS,
+        "Content-Security-Policy": contentSecurityPolicy(nonce, _req.headers.host),
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
       });
       res.end(html);
     } catch (e) {
       this.assistant.log(`[page] ${e}`);
-      res.writeHead(500).end();
+      res.writeHead(500, SECURITY_HEADERS).end();
     }
   }
 
@@ -250,13 +333,13 @@ export class WebApp {
   private async serveStatic(url: string, res: http.ServerResponse): Promise<void> {
     const file = resolveStatic(url.slice("/static/".length));
     if (file === null) {
-      res.writeHead(400).end();
+      res.writeHead(400, SECURITY_HEADERS).end();
       return;
     }
     try {
       const stat = await fsp.stat(file);
       if (!stat.isFile()) {
-        res.writeHead(404).end();
+        res.writeHead(404, SECURITY_HEADERS).end();
         return;
       }
       let body: Buffer;
@@ -275,13 +358,14 @@ export class WebApp {
         this.files.set(file, { mtimeMs: stat.mtimeMs, body, type });
       }
       res.writeHead(200, {
+        ...SECURITY_HEADERS,
         "Content-Type": type,
         "Content-Length": body.length,
         "Cache-Control": "no-store",
       });
       res.end(body);
     } catch {
-      res.writeHead(404).end();
+      res.writeHead(404, SECURITY_HEADERS).end();
     }
   }
 
@@ -309,9 +393,11 @@ export class WebApp {
   private websocket(ws: WebSocket): void {
     const prev = this.ws;
     if (prev && prev.readyState === prev.OPEN) {
-      // Tell the window we are taking the slot from *why* it is going dark: without an
-      // event it could only infer it from the close code, and the kicked page is left
-      // with a text box that silently swallows whatever is typed into it.
+      // One client slot is deliberate: the harness owns one mic, one TTS output and one
+      // conversation. A second *controlling* client would open the mic twice and speak
+      // twice; a read-only spectator would need a second socket class (no commands, no
+      // audio) plus state broadcasting — not just a second `ws`. So the newest window
+      // wins, and the old one is told why instead of going dark mid-sentence.
       try {
         prev.send(JSON.stringify({ type: "session_taken" } satisfies ServerEvent));
         prev.close(1000, "replaced by a new client");
@@ -320,6 +406,7 @@ export class WebApp {
       }
     }
     this.ws = ws;
+    this.droppedAudio = 0; // a fresh page starts with a clean backpressure slate
     // answers the first sweep's ping for sure; from then on only pongs keep it alive
     this.alive.add(ws);
     ws.on("pong", () => this.alive.add(ws));
@@ -376,7 +463,12 @@ export class WebApp {
           ? Buffer.concat(data as Buffer[]).toString("utf-8")
           : (data as Buffer).toString("utf-8");
         try {
-          this.onCommand(JSON.parse(text) as ClientCommand);
+          const cmd = asClientCommand(JSON.parse(text));
+          if (cmd === null) {
+            a.log(`[ws] ignored a frame that is not a command: ${text.slice(0, 80)}`);
+            return;
+          }
+          this.onCommand(cmd);
         } catch (e) {
           a.log(`[ws] bad command: ${e}`);
         }
@@ -572,7 +664,17 @@ export class WebApp {
       if (url === "/") void this.index(req, res).catch((e) => a.log(`[http] ${e}`));
       else if (url.startsWith("/static/"))
         void this.serveStatic(url, res).catch((e) => a.log(`[http] ${e}`));
-      else res.writeHead(404).end();
+      else if (url === "/health") {
+        // The JSON a launcher probes: a TCP connect says "something listens", this says
+        // "the harness is actually alive" (mic, services, model). Answer even while
+        // degraded — a 200 with `ok:false` is more useful than a connection refused.
+        res.writeHead(200, {
+          ...SECURITY_HEADERS,
+          "Content-Type": "application/json; charset=utf-8",
+          "Cache-Control": "no-store",
+        });
+        res.end(JSON.stringify(a.healthSnapshot()));
+      } else res.writeHead(404, SECURITY_HEADERS).end();
     });
     this.server.on("upgrade", (req, socket, head) => this.onUpgrade(req, socket, head));
 

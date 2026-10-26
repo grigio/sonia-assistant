@@ -76,6 +76,19 @@ export type Response = {
    * answers from memory — with an invented item, as at 13:45:01.
    */
   gateAllowed: Set<string>;
+  /**
+   * The tool gate failed (timeout / parse error) at least once in this turn. It is a
+   * relevance judge, not a security boundary: on failure the mutating tool calls are
+   * confirmed instead of being waved through (P0.4).
+   */
+  gateFailed: boolean;
+  /**
+   * A tool result carried text from outside the model's own reasoning — a shell command
+   * (which may have fetched a page) has already run in this turn. Later mutating
+   * `run_command` calls need the user's confirmation, closing the "fetch, then execute"
+   * prompt-injection chain.
+   */
+  tainted: boolean;
 };
 
 type PendingApproval = { id: number; command: string; resolve: (ok: boolean) => void };
@@ -105,6 +118,13 @@ export const TOOL_ROUNDS = 6;
  * of the health poll (`HEALTH_POLL_MS`) costs exactly it (see `src/health.ts`).
  */
 const HEALTH_TIMEOUT_MS = 2_000;
+
+/**
+ * `persistChat` coalesces the writes a turn produces (several `addMessage`s, tool
+ * `keep`s) into one save this many ms after the last one; 🧹, ⟲, restore and shutdown
+ * flush immediately (`persistChatNow`), so the debounce only delays *between* turns.
+ */
+const CHAT_SAVE_DEBOUNCE_MS = 250;
 
 /**
  * Two messages may share one history slot only when neither is part of a tool exchange:
@@ -160,6 +180,8 @@ export class Assistant {
   private chatStore: ChatStore | null = null;
   /** One warning per process: a full disk must not turn into a line per message. */
   private chatSaveFailed = false;
+  /** Pending debounced save: a turn adds several messages in a row (see `persistChat`). */
+  private chatSaveTimer: ReturnType<typeof setTimeout> | null = null;
   /** History size (chars) and prompt tokens of the last real request: their ratio is the
    *  chars/token `fitHistory` scales the window budget with (see `context.ts`). */
   private lastPromptChars = 0;
@@ -182,6 +204,8 @@ export class Assistant {
   /** audio.cpp servers the last liveness round could not reach: `asr` / `tts` / `turn`
    *  (plus `llm`, the one leg that is not audio.cpp — see `healthTargets`). */
   private healthDown: string[] = [];
+  /** When `start()` ran — the uptime `GET /health` reports. */
+  private startedAtMs = 0;
   private healthTimer: ReturnType<typeof setInterval> | null = null;
   private healthBusy = false; // a slow round must never stack on the next tick
   /** The mic source died (see `Harness.runAudio`): nothing can be heard until it is back,
@@ -324,6 +348,7 @@ export class Assistant {
   // ── setup ──
 
   async start(): Promise<void> {
+    this.startedAtMs = Date.now();
     this.logger.verbose = this.cfg.debug;
     this.llm = new LLM(this.cfg);
     this.restoreChat(); // the conversation of the previous run, ids and all
@@ -427,6 +452,7 @@ export class Assistant {
     if (this.mic) await this.mic.close();
     await this.player?.close();
     this.tools?.close();
+    this.flushChat(); // shutdown: what is on disk must match what the user saw
   }
 
   // ── logging ──
@@ -537,6 +563,32 @@ export class Assistant {
     } finally {
       this.healthBusy = false;
     }
+  }
+
+  /**
+   * What `GET /health` reports: the JSON a launcher or `bun run status` can read to tell
+   * a *wedged* harness from a merely listening one — a TCP probe alone used to accept
+   * both. `ok` is the same rule `refreshState()` applies before it would say anything
+   * but `offline`: mic up, and every probed service answering.
+   */
+  healthSnapshot(): {
+    ok: boolean;
+    uptime_s: number;
+    state: StateName;
+    mic_up: boolean;
+    services_down: string[];
+    model: string;
+    via_pi: boolean;
+  } {
+    return {
+      ok: !this.micDown && this.healthDown.length === 0,
+      uptime_s: Math.max(0, Math.round((Date.now() - this.startedAtMs) / 1000)),
+      state: this.state,
+      mic_up: !this.micDown,
+      services_down: [...this.healthDown],
+      model: this.cfg.llmViaPi ? this.cfg.piModel : this.cfg.llmModel,
+      via_pi: this.cfg.llmViaPi,
+    };
   }
 
   /** Start the liveness loop (the warmups in `start()` just proved the servers up). */
@@ -686,7 +738,7 @@ export class Assistant {
       this.utt = null;
     }
     this.history = [];
-    this.persistChat(); // 🧹 empties the file too: a restart must not resurrect the chat
+    this.flushChat(); // 🧹 empties the file too: a restart must not resurrect the chat
     this.pendingPrefix = "";
     this.contextUsed = 0; // the conversation is empty again: the bar goes back to zero
     this.emitContext();
@@ -823,11 +875,29 @@ export class Assistant {
       `💾 chat restored: ${this.history.length} message(s), ` +
         `${this.chatLines().length} chat line(s)`,
     );
-    this.persistChat(); // the pruned version is what stays on disk
+    this.flushChat(); // the pruned version is what stays on disk
   }
 
   /** Write the conversation. A no-op while there is no store (see `chatStore`). */
   private persistChat(): void {
+    if (this.chatStore === null) return;
+    if (this.chatSaveTimer !== null) return; // a turn adds several messages in a row
+    this.chatSaveTimer = setTimeout(() => {
+      this.chatSaveTimer = null;
+      this.writeChat();
+    }, CHAT_SAVE_DEBOUNCE_MS);
+  }
+
+  /** Flush a pending debounced save (🧹, restore, ⟲, shutdown): the file is current now. */
+  flushChat(): void {
+    if (this.chatSaveTimer !== null) {
+      clearTimeout(this.chatSaveTimer);
+      this.chatSaveTimer = null;
+    }
+    this.writeChat();
+  }
+
+  private writeChat(): void {
     const store = this.chatStore;
     if (store === null) return;
     try {
@@ -967,6 +1037,55 @@ export class Assistant {
       this.log(`✂ history ${before} → ${this.history.length} messages (context window)`);
       this.persistChat(); // the trimmed history is the one a restart must come back to
     }
+    // Whole old turns may not be enough: one huge SKILL.md or command output in the turn
+    // being answered can still overflow the window. Truncate the largest tool results,
+    // keeping their head, tail and `tool_call_id` (the pairing a chat template needs).
+    if (size() > budget) {
+      const trimmed = this.trimToolResults(budget);
+      if (trimmed > 0) {
+        this.log(
+          `✂ ${trimmed} tool result(s) truncated to fit the context window (${size()} chars)`,
+        );
+        this.persistChat();
+      }
+    }
+  }
+
+  /**
+   * Shrink the biggest `tool` messages until the history fits, head + tail with a marker in
+   * between. The message object is kept (so the call/result pairing survives); only its
+   * content changes. Returns how many were truncated.
+   */
+  private trimToolResults(budget: number): number {
+    const marker = t(this.cfg.locale, "ctx.trimmed");
+    let trimmed = 0;
+    for (;;) {
+      if (this.historyChars() <= budget) break;
+      let best = -1;
+      let bestLen = 0;
+      for (let i = 0; i < this.history.length; i++) {
+        const m = this.history[i]!;
+        if (m.role !== "tool" || typeof m.content !== "string") continue;
+        if (m.content.length > bestLen) {
+          best = i;
+          bestLen = m.content.length;
+        }
+      }
+      if (best < 0 || bestLen <= 4_000) break; // nothing large enough left to matter
+      const m = this.history[best]!;
+      if (typeof m.content !== "string") break;
+      const body = m.content;
+      const keep = Math.min(3_000, Math.max(1_000, Math.floor(bestLen / 4)));
+      const removed = bestLen - keep * 2;
+      m.content =
+        body.slice(0, keep) +
+        "\n" +
+        marker.replace("{n}", String(removed)) +
+        "\n" +
+        body.slice(-keep);
+      trimmed++;
+    }
+    return trimmed;
   }
 
   /**
@@ -1038,7 +1157,7 @@ export class Assistant {
     // `contextUsed` stays as it is: it is what the *last request* put in the KV cache, and
     // the size of the next prompt is unknowable until it is sent (it corrects itself then)
     this.log(`⟲ history ${before} → ${this.history.length} messages (rewound to #${id})`);
-    this.persistChat(); // ⟲ must survive a restart like the rest of the conversation
+    this.flushChat(); // ⟲ must survive a restart like the rest of the conversation
     this.refreshState();
     return true;
   }
@@ -1071,6 +1190,8 @@ export class Assistant {
       tFirstToken: null,
       denied: new Map(),
       gateAllowed: new Set(),
+      gateFailed: false,
+      tainted: false,
     };
     const userIndex = this.addMessage({ role: "user", content: userText });
     resp.userIndex = userIndex;
@@ -1238,10 +1359,14 @@ export class Assistant {
           const t0 = now();
           // `langHint` is this turn's user text: a timer rings minutes later, so it keeps
           // the language it was asked in («Il Saluto finale è scaduto.», not "The …")
+          const force = name === "run_command" && (resp.gateFailed || resp.tainted);
           const result = gated
             ? toolGated(this.cfg)
-            : await this.tools.call(name, raw, signal, resp.userText);
+            : await this.tools.call(name, raw, signal, resp.userText, { forceApproval: force });
           if (stale()) return; // 🧹 while it ran: its result must not reach the new chat
+          // shell output may carry text fetched from the web: from here on a mutating
+          // run_command is confirmed, not auto-run (P0.4, taint the turn)
+          if (!gated && name === "run_command") resp.tainted = true;
           // what this answer is *already* doing — the judge needs it to see that the next
           // proposal continues the same request instead of starting something of its own
           if (!gated) doing.push(`${name} ${argSummary(raw)} → ${resultHead(result)}`);
@@ -1376,6 +1501,7 @@ export class Assistant {
         ask.map((i) => proposed[i]!),
         skills,
         doing.slice(),
+        resp.controller.signal,
       );
       const allowed = new Set<number>([
         ...carried.filter((i) => i >= 0),
@@ -1407,7 +1533,16 @@ export class Assistant {
       this.log(`   🛡 tool gate: ${list}  (${(now() - t0).toFixed(2)} s)`);
       return allowed;
     } catch (e) {
-      this.log(`[tool-gate] ${String(e).slice(0, 160)} — tool calls proceed unfiltered`);
+      // A barge-in (or ✕) aborts the judge now: that is not a gate failure, the turn is
+      // ending anyway — let it keep its AbortError shape for the callers above.
+      if (isAbortError(e)) throw e;
+      // Fail closed: the judge is a relevance filter, not a security boundary. Returning
+      // `null` used to mean "no gate — every call proceeds"; now it records the failure
+      // so the call loop confirms any *mutating* call (P0.4).
+      resp.gateFailed = true;
+      this.log(
+        `[tool-gate] ${String(e).slice(0, 160)} — mutating tool calls will require approval`,
+      );
       return null;
     }
   }
@@ -1556,6 +1691,8 @@ export class Assistant {
             tFirstToken: null,
             denied: new Map(),
             gateAllowed: new Set(),
+            gateFailed: false,
+            tainted: false,
           };
           this.resp = resp;
           const speak = (async () => {

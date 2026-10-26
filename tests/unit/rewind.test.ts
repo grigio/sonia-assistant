@@ -221,6 +221,8 @@ describe("rewind to a checkpoint", () => {
       tFirstToken: null,
       denied: new Map(),
       gateAllowed: new Set(),
+      gateFailed: false,
+      tainted: false,
     };
 
     expect(a.rewindTo(keep)).toBe(true);
@@ -248,6 +250,8 @@ describe("rewind to a checkpoint", () => {
       tFirstToken: null,
       denied: new Map(),
       gateAllowed: new Set(),
+      gateFailed: false,
+      tainted: false,
     };
 
     expect(a.rewindTo(cp(a, "sto rispondendo"))).toBe(true);

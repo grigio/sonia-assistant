@@ -92,7 +92,8 @@ knob = env var), `i18n.ts` · event loop in `harness/` · model clients in `clie
 | *experimental + optional*: any `pi --list-models` id | alternative LLM leg (`LLM_VIA_PI=1`); harness tools are off in this mode | `pi` CLI subprocess | — |
 
 Speech models go to `models/` via `bun run models-download` (~3.3 GiB total,
-idempotent/resumable) from the [audio.cpp GGUF mirror](https://huggingface.co/audio-cpp/audio.cpp-gguf);
+idempotent/resumable, pinned HF revision + SHA-256 verified) from the
+[audio.cpp GGUF mirror](https://huggingface.co/audio-cpp/audio.cpp-gguf);
 the **LLM `.gguf` is never downloaded here** — it belongs to your external llama-server.
 No dedicated GPU: ASR uses whatever Vulkan device is available (an iGPU is fine) or
 `ASR_BACKEND=cpu`; TTS, Smart Turn and the VAD are CPU-only.
@@ -117,9 +118,9 @@ bun install                            # 1. dependencies
 cp .env.example .env                   # 2. config — set SKILLS_DIR (see "Skills") and
 #   LLM_BASE_URL / LLM_MODEL, or LLM_VIA_PI=1 to use an existing `pi` executable
 
-bun run fetch-and-compile-audio.cpp     # 3. fetch + compile the latest audio.cpp release
-#   (clone → cmake → build, incremental; vendor/ is git-ignored. Or point
-#    AUDIOCPP_SERVER=/path/to/audiocpp_server at an existing binary)
+bun run fetch-and-compile-audio.cpp     # 3. fetch + compile the pinned audio.cpp release
+#   (v0.9.2, commit-checked; clone → cmake → build, incremental; vendor/ is git-ignored.
+#    Or point AUDIOCPP_SERVER=/path/to/audiocpp_server at an existing binary)
 ```
 
 > **Why compile instead of using the official prebuilt binaries?**
@@ -140,7 +141,8 @@ bun run fetch-and-compile-audio.cpp     # 3. fetch + compile the latest audio.cp
 
 ```bash
 bun run models-download                 # 4. speech models (~3.3 GiB, resumable)
-bun run models-download --check         # verify only: ✓/✗ per file, exit 1 if missing
+bun run models-download --check         # verify presence/size: ✓/✗ per file, exit 1 if missing
+bun run models-download --verify        # also hash every file against the pinned SHA-256
 bun run models-download --only vad      # one package only (asr|tts|turn|vad)
 
 systemctl --user start llama-server     # 5. the LLM (external, your own unit/config)

@@ -69,6 +69,12 @@ export class Skills {
   /** `dataDir/skills.json` — the user's UI choice, `null` = every skill in the dir. */
   readonly storePath: string;
   private active: Set<string> | null = null;
+  /** The dir's mtime when `list()` last read it + that result: `list()` is called per
+   *  prompt, gate and hello, and re-reading every SKILL.md each time is wasted IO while
+   *  the dir sits still. A new/removed subdir updates the parent dir's mtime, so the
+   *  cache notices installs; an *edited* SKILL.md is picked up by `setActive` or a
+   *  restart (the list is cosmetic for the UI, the prompt uses `read()` which is live). */
+  private cache: { mtimeMs: number; list: SkillInfo[] } | null = null;
 
   constructor(opts: { dir: string; dataDir: string }) {
     this.dir = expandTilde(opts.dir);
@@ -88,14 +94,18 @@ export class Skills {
 
   /** Every skill currently in the dir, with the active flag the UI renders. */
   list(): SkillInfo[] {
-    let names: string[] = [];
+    let mtimeMs = 0;
     try {
-      names = fs.readdirSync(this.dir).filter((n) => !n.startsWith("."));
+      mtimeMs = fs.statSync(this.dir).mtimeMs;
     } catch {
       return []; // dir missing (or unreadable) → no skills, no error
     }
+    if (this.cache && this.cache.mtimeMs === mtimeMs) return this.cache.list;
     const out: SkillInfo[] = [];
-    for (const dirName of names.sort()) {
+    for (const dirName of fs
+      .readdirSync(this.dir)
+      .filter((n) => !n.startsWith("."))
+      .sort()) {
       let text = "";
       try {
         text = fs.readFileSync(path.join(this.dir, dirName, "SKILL.md"), "utf-8");
@@ -109,6 +119,7 @@ export class Skills {
         active: this.isActive(dirName),
       });
     }
+    this.cache = { mtimeMs, list: out };
     return out;
   }
 
@@ -119,6 +130,7 @@ export class Skills {
   /** Persist the UI choice; returns the fresh list (what the caller broadcasts). */
   setActive(names: string[]): SkillInfo[] {
     this.active = new Set(names.map(String));
+    this.cache = null; // the list carries the active flags — it must be rebuilt
     try {
       fs.mkdirSync(path.dirname(this.storePath), { recursive: true });
       writeJsonAtomic(this.storePath, [...this.active].sort(), 1);

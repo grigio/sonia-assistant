@@ -52,7 +52,23 @@ describe("isSafeCommand", () => {
 });
 
 describe("skills dir = the user's own code → trusted", () => {
-  const SKILLS = path.join(os.homedir(), ".pi", "agent", "skills");
+  const SKILLS = fs.mkdtempSync(path.join(os.tmpdir(), "fd-tools-skills-"));
+  afterAll(() => fs.rmSync(SKILLS, { recursive: true, force: true }));
+  // trust now requires the target to exist: build the tree these lines name
+  for (const f of [
+    "websurfx/scripts/search.ts",
+    "websurfx/scripts/read_url.ts",
+    "websurfx/SKILL.md",
+    "hackernews/scripts/top.ts",
+    "duckduckgo/extract_ddg.py",
+    "demo/scripts/x.ts",
+    "a.md",
+    "x.ts",
+    "x",
+  ]) {
+    fs.mkdirSync(path.dirname(path.join(SKILLS, f)), { recursive: true });
+    fs.writeFileSync(path.join(SKILLS, f), "// fixture\n");
+  }
 
   test("a script under the skills dir runs without approval", () => {
     expect(
@@ -60,8 +76,8 @@ describe("skills dir = the user's own code → trusted", () => {
     ).toBe(true);
     expect(isSafeCommand(`cat ${SKILLS}/websurfx/SKILL.md`, SKILLS)).toBe(true);
     expect(isSafeCommand(`node ${SKILLS}/hackernews/scripts/top.ts --limit 5`, SKILLS)).toBe(true);
-    // …also with a `~` path, and with globs/`?` that the whitelist would never allow
-    expect(isSafeCommand(`cat ~/.pi/agent/skills/*/SKILL.md`, SKILLS)).toBe(true);
+    // …also with globs/`?` that the whitelist would never allow
+    expect(isSafeCommand(`cat ${SKILLS}/*/SKILL.md`, SKILLS)).toBe(true);
   });
 
   test("the real skill workflow (fetch → file → script) runs unattended", () => {
