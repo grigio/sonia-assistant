@@ -228,8 +228,8 @@ Two read-only lookups, off the "fully local" path on purpose and individually sw
   instance that serves `format=json`; empty (the default) means no such tool. The query is
   forwarded by SearXNG to public search engines.
 - `get_weather` / `set_user_location` — [Open-Meteo](https://open-meteo.com/) (no key). A
-  city name or coordinates are sent to `api.open-meteo.com`; `WEATHER_TOOLS=0` removes both
-  tools. The place the user names is saved in `data/settings.json` (`location`) and then
+  city name or coordinates are sent to `api.open-meteo.com`, so both tools are off by
+  default; `WEATHER_TOOLS=1` enables them. The place the user names is saved in `data/settings.json` (`location`) and then
   used for the weather, `get_datetime` and the system prompt; none is assumed before.
 
 The prompt also carries a rule against claiming to "check" or "search" without calling a

@@ -31,7 +31,7 @@ describe("Config.fromEnv", () => {
     expect(cfg.llmTemperature).toBe(0.7);
     expect(cfg.bargeIn).toBe(true);
     expect(cfg.searxngUrl).toBe(""); // no web_search tool without a SearXNG instance
-    expect(cfg.weatherTools).toBe(true);
+    expect(cfg.weatherTools).toBe(false);
     expect(cfg.silenceMs).toBe(900);
     expect(cfg.decisionMode).toBe("auto");
     expect(cfg.decisionBaseUrl).toBe(""); // empty → the judge shares the main leg
