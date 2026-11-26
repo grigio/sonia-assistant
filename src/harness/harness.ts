@@ -94,6 +94,7 @@ export class Harness extends Assistant {
   async processFrame(frame: Uint8Array, t: number): Promise<void> {
     const cfg = this.cfg;
     const talking = this.player.audible;
+    if (talking) this.echo.noteAudible(t);
     if (cfg.halfDuplex && (talking || this.resp !== null)) {
       this.preroll = [];
       this.speechRunMs = 0;
@@ -162,6 +163,7 @@ export class Harness extends Assistant {
       listenUntil: 0,
       barge: false,
       partial: "",
+      echoWindow: this.cfg.echoGuard && this.echo.inWindow(t, this.player.audible),
     };
 
     if (this.pendingApproval !== null) {
@@ -258,6 +260,9 @@ export class Harness extends Assistant {
   private checkBargeConfirm(u: Utterance): void {
     /* Cancel the assistant for a real interruption without waiting for the turn end. */
     const spoken = this.resp!.spoken.join(" ");
+    // our own voice (or a recogniser hallucination of it): never cancel on it; finishTurn()
+    // drops it and resumes playback
+    if (u.echoWindow && this.echo.verdict(u.partial, now(), spoken).echo) return;
     if (bargeInterrupts(u.partial, spoken, this.cfg)) {
       this.log(`  ✋ interrupted by user: «${u.partial.trim()}»`);
       this.emit({ type: "event", text: msg(this.cfg.locale, "evt.interrupted") });
@@ -292,6 +297,21 @@ export class Harness extends Assistant {
         return;
       }
       // not a yes/no → falls through as a brand-new user turn
+    }
+
+    // An utterance that began while the assistant was speaking (or just after) and that is its
+    // own voice coming back must neither barge in nor become a turn.
+    if (u.echoWindow && hasWords(text)) {
+      const v = this.echo.verdict(text, now(), this.resp?.spoken.join(" ") ?? "");
+      if (v.echo) {
+        const why = v.reason === "overlap" ? `overlap ${Math.round(v.ratio * 100)}%` : v.reason;
+        this.log(`  🔁 echo dropped: «${text}» (${why})`);
+        if (this.resp && this.player.paused) this.player.resume();
+        this.status("");
+        this.emit({ type: "partial", text: "" });
+        this.refreshState();
+        return;
+      }
     }
 
     if (this.gen > u.gen && !u.barge && this.resp === null) {
