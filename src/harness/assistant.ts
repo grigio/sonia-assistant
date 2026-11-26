@@ -24,9 +24,11 @@ import type { HistoryMessage, ServerEvent, StateName, TaskInfo } from "../events
 import { healthUrl, llmHealthUrl, probeAll, type Target } from "../health";
 import { t, type ViaKey } from "../i18n";
 import { Logger } from "../log";
+import { loadLocation } from "../settings";
 import { type SkillInfo, Skills } from "../skills";
 import { argSummary, GATE_EXEMPT_TOOLS, Tools, toolDescription } from "../tools";
 import { SileroVAD } from "../vad";
+import { forcedTool } from "../web-tools";
 import { ChatStore, type RestoredChat } from "./chat-store";
 import { AsyncQueue, abortableIter, abortableSleep, isAbortError, now, withAbort } from "./queues";
 import { SentenceSplitter } from "./sentences";
@@ -267,7 +269,44 @@ export class Assistant {
     if (!this.cfg.llmEnableTools || this.cfg.llmViaPi || !this.skills) {
       return `${this.basePrompt}\n\n${hint}`;
     }
-    return `${this.basePrompt}\n\n${this.skills.block()}\n\n${hint}`;
+    const { top, tail } = this.liveToolsPrompt();
+    return [top, this.basePrompt, this.skills.block(), tail, hint].filter(Boolean).join("\n\n");
+  }
+
+  /**
+   * The live-tools part of the system prompt. `top` — where the user is, when they said so —
+   * goes FIRST: placed near the end, a 30B model answered "what's the weather like?" from
+   * the city name instead of calling get_weather (0/8 calls, against 4-6/6 up front). `tail`
+   * holds the tool and honesty rules and the user's local time (minute resolution: the
+   * system prompt is the KV-cache prefix, so it changes at most once a minute).
+   */
+  private liveToolsPrompt(): { top: string; tail: string } {
+    const loc = this.cfg.weatherTools
+      ? loadLocation(path.join(this.cfg.dataDir, "settings.json"))
+      : null;
+    const lines: string[] = [];
+    if (this.cfg.weatherTools) lines.push(t(this.cfg.locale, "prompt.liveWeather"));
+    if (this.cfg.searxngUrl) lines.push(t(this.cfg.locale, "prompt.liveSearch"));
+    lines.push(t(this.cfg.locale, "prompt.honesty"));
+    let top = "";
+    if (loc) {
+      top = t(this.cfg.locale, "prompt.location", {
+        city: loc.city,
+        country: loc.country,
+        tz: loc.timezone,
+      });
+      const time = new Intl.DateTimeFormat(this.cfg.locale === "it" ? "it-IT" : "en-GB", {
+        weekday: "long",
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZone: loc.timezone,
+      }).format(new Date());
+      lines.push(t(this.cfg.locale, "prompt.localTime", { time }));
+    }
+    return { top, tail: lines.join("\n") };
   }
 
   /** Skills as the settings drawer renders them: a fresh scan of SKILLS_DIR. */
@@ -359,6 +398,8 @@ export class Assistant {
     this.skills = skills;
     this.tools = new Tools({
       dataDir: this.cfg.dataDir,
+      searxngUrl: this.cfg.searxngUrl,
+      weatherTools: this.cfg.weatherTools,
       announce: (text, key) => {
         this.announce(text, key);
       },
@@ -1263,6 +1304,9 @@ export class Assistant {
       const tools = this.cfg.llmEnableTools && !this.cfg.llmViaPi ? this.tools.schemas() : null;
       this.sentences = sentences;
       const splitter = new SentenceSplitter();
+      const speak = (s: string): void => {
+        sentences.push(s);
+      };
       // a tool call written as *text* (no tools on offer) must never be spoken nor kept
       const markup = new ToolMarkupFilter();
       // A tool exchange has to survive the turn: `messages` is rebuilt from `this.history`
@@ -1298,6 +1342,20 @@ export class Assistant {
         this.lastPromptChars = this.historyChars();
         let textRound = "";
         let calls: ToolCall[] | null = null;
+        // The first round of a plain weather question or explicit search request is held
+        // back from the TTS until we know it called the tool: if it did not, its text (an
+        // invented forecast, "I'll search for it right away") is dropped and the call is
+        // made for it.
+        const forced = round === 1 ? forcedTool(resp.userText) : null;
+        const must =
+          forced && offer?.some((s) => (s.function as { name?: string })?.name === forced.name)
+            ? forced
+            : null;
+        let held = "";
+        const say = (c: string): void => {
+          if (must) held += c;
+          else for (const s of splitter.feed(c)) speak(s);
+        };
         let reasoningStarted = false; // one blank line before each extra round's thinking
         for await (const item of abortableIter(
           this.llm.stream(messages, offer, signal),
@@ -1316,7 +1374,7 @@ export class Assistant {
             const clean = markup.feed(item.text);
             if (clean) {
               textRound += clean;
-              for (const s of splitter.feed(clean)) sentences.push(s);
+              say(clean);
             }
           } else if (item.kind === "event") {
             if (stale()) return;
@@ -1334,7 +1392,22 @@ export class Assistant {
         const tail = markup.flush(); // the last held-back piece of this round's text
         if (tail) {
           textRound += tail;
-          for (const s of splitter.feed(tail)) sentences.push(s);
+          say(tail);
+        }
+        if (must && !calls?.length) {
+          this.log(
+            `   🧭 ${must.name} asked for but not called — calling it (dropped: «${held.trim().slice(0, 80)}»)`,
+          );
+          calls = [
+            {
+              id: `auto-${must.name}-${Date.now()}`,
+              type: "function",
+              function: { name: must.name, arguments: JSON.stringify(must.args) },
+            },
+          ];
+          textRound = "";
+        } else if (held) {
+          for (const s of splitter.feed(held)) speak(s);
         }
         resp.fullText += textRound;
         if (!calls) break;
@@ -1391,7 +1464,7 @@ export class Assistant {
       if (markup.seen) {
         this.log(`⚠ tool-call markup in the model's text — dropped ${markup.droppedChars} chars`);
       }
-      for (const s of splitter.flush()) sentences.push(s);
+      for (const s of splitter.flush()) speak(s);
       let text = SentenceSplitter.clean(resp.fullText);
       if (!text) {
         // Even the tool-less round came back empty. Silence is not an answer: speak a

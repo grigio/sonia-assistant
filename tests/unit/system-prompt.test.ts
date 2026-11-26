@@ -6,6 +6,7 @@ import { PI_SYSTEM_TAIL } from "../../src/clients/pi";
 import { Config } from "../../src/config";
 import { Assistant } from "../../src/harness/assistant";
 import { type Locale, t } from "../../src/i18n";
+import { saveLocation } from "../../src/settings";
 import { Skills } from "../../src/skills";
 
 /** The block `Skills.block()` appends — the persona file itself never carries it. */
@@ -155,5 +156,65 @@ describe("the persona knows where the newest item of a web list is", () => {
     expect(persona).toMatch(/comes CUT/);
     expect(persona).toMatch(/below the mark is the END of the original output/);
     expect(persona).toMatch(/not something newer that came after it/);
+  });
+});
+
+describe("live tools in the system prompt", () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "fd-live-"));
+  const skillsDir = path.join(tmp, "skills");
+  fs.mkdirSync(skillsDir, { recursive: true });
+
+  function assistant(over: Partial<Config> = {}): Assistant {
+    const cfg = Object.assign(Config.fromEnv(), {
+      llmEnableTools: true,
+      llmViaPi: false,
+      locale: "en" as Locale,
+      dataDir: fs.mkdtempSync(path.join(tmp, "data-")),
+      searxngUrl: "",
+      weatherTools: true,
+      ...over,
+    });
+    const a = new Assistant(cfg, null, "null");
+    a.skills = new Skills({ dir: skillsDir, dataDir: cfg.dataDir });
+    return a;
+  }
+
+  test("the honesty rule and the weather rule are there; search only with a SearXNG URL", () => {
+    const off = assistant().systemPrompt;
+    expect(off).toContain(t("en", "prompt.honesty"));
+    expect(off).toContain(t("en", "prompt.liveWeather"));
+    expect(off).not.toContain(t("en", "prompt.liveSearch"));
+    const on = assistant({ searxngUrl: "http://searx.example:8888" }).systemPrompt;
+    expect(on).toContain(t("en", "prompt.liveSearch"));
+  });
+
+  test("with the weather tools off there is no weather rule and no location", () => {
+    const p = assistant({ weatherTools: false }).systemPrompt;
+    expect(p).not.toContain(t("en", "prompt.liveWeather"));
+    expect(p).toContain(t("en", "prompt.honesty"));
+  });
+
+  test("a saved location goes first, the persona follows verbatim, the language line is last", () => {
+    const a = assistant();
+    saveLocation(path.join(a.cfg.dataDir, "settings.json"), {
+      city: "Lisbon",
+      country: "Portugal",
+      timezone: "Europe/Lisbon",
+      lat: 38.72,
+      lon: -9.14,
+    });
+    const p = a.systemPrompt;
+    expect(p.startsWith("User location: Lisbon, Portugal (time zone Europe/Lisbon)")).toBe(true);
+    const persona = fs.readFileSync(a.cfg.systemPromptFile, "utf-8").trim();
+    expect(p).toContain(`\n\n${persona}\n\n`);
+    expect(p).toContain("The user's local time now:");
+    expect(p.endsWith(t("en", "prompt.langDefault"))).toBe(true);
+  });
+
+  test("no saved location → the persona comes first and no place is invented", () => {
+    const a = assistant();
+    const persona = fs.readFileSync(a.cfg.systemPromptFile, "utf-8").trim();
+    expect(a.systemPrompt.startsWith(persona)).toBe(true);
+    expect(a.systemPrompt).not.toContain("User location:");
   });
 });

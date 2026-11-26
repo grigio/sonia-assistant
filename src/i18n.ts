@@ -85,6 +85,26 @@ const it = {
     "Basta strumenti: rispondi adesso con una o due frasi a voce, usando quello che hai " +
     "già trovato. Non chiamare altri strumenti.",
 
+  /** Live-tool rules of the system prompt. Without them a small model answers "what's the
+   *  weather like?" from memory, or says "I'll check right away" and calls nothing. */
+  "prompt.liveWeather":
+    "METEO: qualsiasi domanda sul meteo → chiama get_weather (senza luogo usa quello dove " +
+    "si trova l'utente; se non lo conosci, chiedilo). Non inventare mai il meteo.",
+  "prompt.liveSearch":
+    "RICERCA: notizie, fatti attuali, prezzi, cose di cui non sei sicura, oppure «cerca» / " +
+    "«guarda» → chiama web_search. Non rispondere a memoria a queste domande.",
+  "prompt.honesty":
+    "REGOLA DI ONESTÀ: non dire mai che stai controllando, cercando o recuperando qualcosa " +
+    "se non chiami uno strumento per farlo in questa stessa risposta: non esiste lavoro in " +
+    "background, dopo la tua risposta non continua niente. Se nessuno strumento può farlo, " +
+    "dillo chiaramente.",
+  /** First block of the system prompt when the user's place is known: placed near the end,
+   *  the model answered a weather question from the city name instead of calling the tool. */
+  "prompt.location":
+    "Posizione dell'utente: {city}, {country} (fuso orario {tz}). Se dice di essersi " +
+    "spostato, chiama set_user_location.",
+  "prompt.localTime": "L'ora locale dell'utente adesso: {time}.",
+
   /** Appended to the system prompt, last: the generic "mirror the user" rule alone does
    *  not hold on a 4B model once the skills block follows it (measured 5/5 Italian
    *  answers to English with LOCALE=en; 0/5 with this line). */
@@ -219,6 +239,21 @@ const en: Record<keyof typeof it, string> = {
   "prompt.answerNow":
     "Enough tools: answer now with one or two spoken sentences, using what you already " +
     "found. Do not call any other tool.",
+
+  "prompt.liveWeather":
+    "WEATHER: any question about the weather → call get_weather (without a place it uses " +
+    "where the user is; if you do not know, ask). Never guess the weather.",
+  "prompt.liveSearch":
+    "SEARCH: news, current events, prices, facts you are not sure about, or 'search' / " +
+    "'look up' → call web_search. Never answer those from memory.",
+  "prompt.honesty":
+    "HONESTY RULE: never say you are checking, searching, retrieving or looking something " +
+    "up unless you call a tool for it in this same reply: there is no background work, " +
+    "nothing continues after your reply ends. If no tool can do it, say so plainly.",
+  "prompt.location":
+    "User location: {city}, {country} (time zone {tz}). If they say they have moved, call " +
+    "set_user_location.",
+  "prompt.localTime": "The user's local time now: {time}.",
 
   "prompt.langDefault":
     "Language default: ENGLISH — this user's interface is in English, so when a message " +

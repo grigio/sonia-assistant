@@ -249,6 +249,14 @@ export class Config {
   echoOverlap = 0.6;
   halfDuplex = false;
 
+  // ── web tools (read-only; see src/web-tools.ts) ──
+  /** Base URL of a SearXNG instance with the JSON format enabled. Empty = no `web_search`
+   *  tool. The query leaves the machine (SearXNG forwards it to public search engines). */
+  searxngUrl = "";
+  /** `get_weather` / `set_user_location`: city names and coordinates go to Open-Meteo.
+   *  Off by default: a cloud call, so it is opt-in like `web_search`. */
+  weatherTools = false;
+
   // ── skills (SKILL.md packages; the user activates them in the UI, they reach the
   //    context only through the prompt addendum + the list_skills / read_skill tools) ──
   /** pi's own folder by default, so one skill set serves both legs. `~` is expanded. */

@@ -6,6 +6,8 @@ const KEYS = [
   "LLM_TEMPERATURE",
   "LLM_ENABLE_TOOLS",
   "BARGE_IN",
+  "SEARXNG_URL",
+  "WEATHER_TOOLS",
   "SILENCE_MS",
   "PI_MODEL",
   "DECISION_MODE",
@@ -28,6 +30,8 @@ describe("Config.fromEnv", () => {
     expect(cfg.llmMaxTokens).toBe(400);
     expect(cfg.llmTemperature).toBe(0.7);
     expect(cfg.bargeIn).toBe(true);
+    expect(cfg.searxngUrl).toBe(""); // no web_search tool without a SearXNG instance
+    expect(cfg.weatherTools).toBe(false);
     expect(cfg.silenceMs).toBe(900);
     expect(cfg.decisionMode).toBe("auto");
     expect(cfg.decisionBaseUrl).toBe(""); // empty → the judge shares the main leg
