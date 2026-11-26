@@ -30,7 +30,7 @@ import { SileroVAD } from "../vad";
 import { ChatStore, type RestoredChat } from "./chat-store";
 import { AsyncQueue, abortableIter, abortableSleep, isAbortError, now, withAbort } from "./queues";
 import { SentenceSplitter } from "./sentences";
-import { classifyYesNo } from "./text";
+import { classifyYesNo, hasInterruptMarker, hasWords, stripInterruptMarkers } from "./text";
 
 export type Utterance = {
   gen: number;
@@ -146,9 +146,20 @@ function mergeable(last: ChatMessage, msg: ChatMessage): boolean {
  * user/assistant alternation. The glued message is a copy: the history's own messages —
  * and the ids they carry — are never touched.
  */
-function forModel(history: ChatMessage[]): ChatMessage[] {
+function forModel(history: ChatMessage[], interruptedNote = ""): ChatMessage[] {
   const out: ChatMessage[] = [];
-  for (const m of history) {
+  // The "[interrupted by the user]" marker is never shown to the model inside its own text
+  // (it learns to write it); the fact goes on the next user message as a note instead.
+  let noteNext = false;
+  for (const orig of history) {
+    let m = orig;
+    if (m.role === "assistant" && typeof m.content === "string" && hasInterruptMarker(m.content)) {
+      m = { ...m, content: stripInterruptMarkers(m.content) || "…" };
+      noteNext = !!interruptedNote;
+    } else if (noteNext && m.role === "user" && typeof m.content === "string") {
+      m = { ...m, content: `${interruptedNote} ${m.content}` };
+      noteNext = false;
+    }
     const last = out[out.length - 1];
     if (last && mergeable(last, m)) {
       out[out.length - 1] = {
@@ -1257,12 +1268,20 @@ export class Assistant {
       this.fitHistory(); // …and the whole history has to fit the window
       const messages: ChatMessage[] = [
         { role: "system", content: this.systemPrompt },
-        ...forModel(this.history), // two kept questions in a row are one turn *here* only
+        // two kept questions in a row are one turn *here* only
+        ...forModel(this.history, t(this.cfg.locale, "hist.interruptedNote")),
       ];
       // in pi mode pi brings its own tools (bash, read, edit…)
       const tools = this.cfg.llmEnableTools && !this.cfg.llmViaPi ? this.tools.schemas() : null;
       this.sentences = sentences;
       const splitter = new SentenceSplitter();
+      // never speak nor show the "[interrupted by the user]" marker
+      let markerSeen = false;
+      const speak = (s: string): void => {
+        const c = stripInterruptMarkers(s);
+        if (c !== s) markerSeen = true;
+        if (hasWords(c)) sentences.push(c);
+      };
       // a tool call written as *text* (no tools on offer) must never be spoken nor kept
       const markup = new ToolMarkupFilter();
       // A tool exchange has to survive the turn: `messages` is rebuilt from `this.history`
@@ -1316,7 +1335,7 @@ export class Assistant {
             const clean = markup.feed(item.text);
             if (clean) {
               textRound += clean;
-              for (const s of splitter.feed(clean)) sentences.push(s);
+              for (const s of splitter.feed(clean)) speak(s);
             }
           } else if (item.kind === "event") {
             if (stale()) return;
@@ -1334,7 +1353,7 @@ export class Assistant {
         const tail = markup.flush(); // the last held-back piece of this round's text
         if (tail) {
           textRound += tail;
-          for (const s of splitter.feed(tail)) sentences.push(s);
+          for (const s of splitter.feed(tail)) speak(s);
         }
         resp.fullText += textRound;
         if (!calls) break;
@@ -1391,8 +1410,9 @@ export class Assistant {
       if (markup.seen) {
         this.log(`⚠ tool-call markup in the model's text — dropped ${markup.droppedChars} chars`);
       }
-      for (const s of splitter.flush()) sentences.push(s);
-      let text = SentenceSplitter.clean(resp.fullText);
+      for (const s of splitter.flush()) speak(s);
+      if (markerSeen) this.log("⚠ model wrote an interruption marker — stripped before TTS");
+      let text = stripInterruptMarkers(SentenceSplitter.clean(resp.fullText));
       if (!text) {
         // Even the tool-less round came back empty. Silence is not an answer: speak a
         // line of our own, and keep the history off an empty assistant message (strict

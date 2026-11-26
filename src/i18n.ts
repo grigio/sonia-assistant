@@ -62,6 +62,9 @@ const it = {
   // ── history notes (kept in the conversation, shown again after a reload) ──
   "hist.interrupted": "[interrotto dall'utente]",
   "hist.interruptedQuiet": "[interrotto dall'utente prima di parlare]",
+  /** Put on the user message that followed an interrupted reply (the model's view only). */
+  "hist.interruptedNote":
+    "(Nota di sistema: l'utente ha interrotto la tua risposta precedente a metà.)",
 
   // ── prompt fragments ──
   // data/chat.json 94-96: after "Perfetto, grazie." the model wanted add_note, the gate
@@ -205,6 +208,7 @@ const en: Record<keyof typeof it, string> = {
 
   "hist.interrupted": "[interrupted by the user]",
   "hist.interruptedQuiet": "[interrupted by the user before speaking]",
+  "hist.interruptedNote": "(System note: the user interrupted your previous reply midway.)",
 
   "gated.tool":
     "This tool was not run: the user did not ask for it in their last message. " +
