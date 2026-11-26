@@ -90,6 +90,7 @@ const RANGES: Record<string, { min?: number; max?: number }> = {
   bargeMinMs: { min: 0 },
   bargeConfirmWords: { min: 0 },
   echoOverlap: { min: 0, max: 1 },
+  echoTailMs: { min: 0 },
 };
 
 /**
@@ -247,6 +248,11 @@ export class Config {
   bargeMinMs = 250;
   bargeConfirmWords = 3;
   echoOverlap = 0.6;
+  /** Echo guard: drop an utterance that is the assistant's own recent speech (or a
+   *  recogniser hallucination of it) when it began while it was audible, or within
+   *  `echoTailMs` after playback ended. Shares `echoOverlap` as its threshold. */
+  echoGuard = true;
+  echoTailMs = 1500;
   halfDuplex = false;
 
   // ── skills (SKILL.md packages; the user activates them in the UI, they reach the

@@ -28,6 +28,7 @@ import { type SkillInfo, Skills } from "../skills";
 import { argSummary, GATE_EXEMPT_TOOLS, Tools, toolDescription } from "../tools";
 import { SileroVAD } from "../vad";
 import { ChatStore, type RestoredChat } from "./chat-store";
+import { EchoGuard } from "./echo-guard";
 import { AsyncQueue, abortableIter, abortableSleep, isAbortError, now, withAbort } from "./queues";
 import { SentenceSplitter } from "./sentences";
 import { classifyYesNo } from "./text";
@@ -46,6 +47,8 @@ export type Utterance = {
   listenUntil: number;
   barge: boolean; // started while the assistant was talking
   partial: string;
+  /** Started while the assistant was audible or just after: the echo guard may judge it. */
+  echoWindow?: boolean;
 };
 
 export type Response = {
@@ -228,6 +231,8 @@ export class Assistant {
   player!: Player;
 
   sentences: AsyncQueue<string | null> | null = null;
+  /** What the assistant said in the last ~20 s, to recognise its own voice coming back. */
+  readonly echo: EchoGuard;
 
   private approvalSeq = 0;
   /** Bumped by resetConversation(): a turn stamped with an older epoch is old-chat data. */
@@ -242,6 +247,7 @@ export class Assistant {
     recordPath: string | null = null,
   ) {
     this.cfg = cfg;
+    this.echo = new EchoGuard(20, cfg.echoTailMs, cfg.echoOverlap);
     this.mic = mic;
     this.playerSink = playerSink;
     this.recordPath = recordPath;
@@ -1567,6 +1573,7 @@ export class Assistant {
   onSegmentStart(tag: string): void {
     if (this.resp !== null && tag) {
       this.resp.spoken.push(tag);
+      this.echo.noteSpoken(tag, now());
       this.onFirstAudio();
       this.emit({ type: "assistant", text: tag });
       this.refreshState();

@@ -6,6 +6,8 @@ const KEYS = [
   "LLM_TEMPERATURE",
   "LLM_ENABLE_TOOLS",
   "BARGE_IN",
+  "ECHO_GUARD",
+  "ECHO_TAIL_MS",
   "SILENCE_MS",
   "PI_MODEL",
   "DECISION_MODE",
@@ -28,6 +30,8 @@ describe("Config.fromEnv", () => {
     expect(cfg.llmMaxTokens).toBe(400);
     expect(cfg.llmTemperature).toBe(0.7);
     expect(cfg.bargeIn).toBe(true);
+    expect(cfg.echoGuard).toBe(true);
+    expect(cfg.echoTailMs).toBe(1500);
     expect(cfg.silenceMs).toBe(900);
     expect(cfg.decisionMode).toBe("auto");
     expect(cfg.decisionBaseUrl).toBe(""); // empty → the judge shares the main leg
@@ -116,7 +120,8 @@ describe("clampNumeric", () => {
     expect(clampNumeric("llmTemperature", 5, log)).toBe(2);
     expect(clampNumeric("llmTemperature", -1, log)).toBe(0);
     expect(clampNumeric("echoOverlap", 0.6, log)).toBe(0.6);
+    expect(clampNumeric("echoTailMs", -10, log)).toBe(0);
     expect(clampNumeric("unknownKnob", -42, log)).toBe(-42); // no rule → untouched
-    expect(warnings).toHaveLength(2);
+    expect(warnings).toHaveLength(3);
   });
 });

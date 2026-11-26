@@ -190,6 +190,13 @@ enabled. Headphones need none of this. Clients pick the devices up with
 `MIC_TARGET=fd_ec_source`, `SPK_TARGET=fd_ec_sink`, `SONIA_AEC=1`; the GTK client
 reads them from `~/.config/sonia-gtk4/env`.
 
+When the canceller still leaks (a phone at high volume), the **echo guard** is the second
+line: an utterance that began while Sonia was audible, or `ECHO_TAIL_MS` (1500) after she
+stopped, is dropped if it matches her last ~20 s of speech (content words, fuzzy) or is a
+typical recogniser phantom ("Subscribe.", "Thanks for watching"). It neither cancels the
+reply nor becomes a turn; "stop", "wait" or "Sonia" always interrupt. `ECHO_GUARD=0` turns
+it off, `ECHO_OVERLAP` is its threshold.
+
 ### Development
 
 ```bash
