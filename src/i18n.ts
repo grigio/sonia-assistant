@@ -97,16 +97,13 @@ const it = {
     "REGOLA DI ONESTÀ: non dire mai che stai controllando, cercando o recuperando qualcosa " +
     "se non chiami uno strumento per farlo in questa stessa risposta: non esiste lavoro in " +
     "background, dopo la tua risposta non continua niente. Se nessuno strumento può farlo, " +
-    "dillo chiaramente. Non scrivere mai note tra parentesi come «[interrotto dall'utente]».",
+    "dillo chiaramente.",
   /** First block of the system prompt when the user's place is known: placed near the end,
    *  the model answered a weather question from the city name instead of calling the tool. */
   "prompt.location":
     "Posizione dell'utente: {city}, {country} (fuso orario {tz}). Se dice di essersi " +
     "spostato, chiama set_user_location.",
   "prompt.localTime": "L'ora locale dell'utente adesso: {time}.",
-  /** Put on the user message that followed an interrupted reply (the model's view only). */
-  "hist.interruptedNote":
-    "(Nota di sistema: l'utente ha interrotto la tua risposta precedente a metà.)",
 
   /** Appended to the system prompt, last: the generic "mirror the user" rule alone does
    *  not hold on a 4B model once the skills block follows it (measured 5/5 Italian
@@ -252,13 +249,11 @@ const en: Record<keyof typeof it, string> = {
   "prompt.honesty":
     "HONESTY RULE: never say you are checking, searching, retrieving or looking something " +
     "up unless you call a tool for it in this same reply: there is no background work, " +
-    "nothing continues after your reply ends. If no tool can do it, say so plainly. Never " +
-    "write bracketed notes such as '[interrupted by the user]'.",
+    "nothing continues after your reply ends. If no tool can do it, say so plainly.",
   "prompt.location":
     "User location: {city}, {country} (time zone {tz}). If they say they have moved, call " +
     "set_user_location.",
   "prompt.localTime": "The user's local time now: {time}.",
-  "hist.interruptedNote": "(System note: the user interrupted your previous reply midway.)",
 
   "prompt.langDefault":
     "Language default: ENGLISH — this user's interface is in English, so when a message " +

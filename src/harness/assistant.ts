@@ -32,7 +32,7 @@ import { forcedTool } from "../web-tools";
 import { ChatStore, type RestoredChat } from "./chat-store";
 import { AsyncQueue, abortableIter, abortableSleep, isAbortError, now, withAbort } from "./queues";
 import { SentenceSplitter } from "./sentences";
-import { classifyYesNo, hasInterruptMarker, hasWords, stripInterruptMarkers } from "./text";
+import { classifyYesNo } from "./text";
 
 export type Utterance = {
   gen: number;
@@ -148,20 +148,9 @@ function mergeable(last: ChatMessage, msg: ChatMessage): boolean {
  * user/assistant alternation. The glued message is a copy: the history's own messages —
  * and the ids they carry — are never touched.
  */
-function forModel(history: ChatMessage[], interruptedNote = ""): ChatMessage[] {
+function forModel(history: ChatMessage[]): ChatMessage[] {
   const out: ChatMessage[] = [];
-  // The "[interrupted by the user]" marker is never shown to the model inside its own text
-  // (it learns to write it); the fact goes on the next user message as a note instead.
-  let noteNext = false;
-  for (const orig of history) {
-    let m = orig;
-    if (m.role === "assistant" && typeof m.content === "string" && hasInterruptMarker(m.content)) {
-      m = { ...m, content: stripInterruptMarkers(m.content) || "…" };
-      noteNext = !!interruptedNote;
-    } else if (noteNext && m.role === "user" && typeof m.content === "string") {
-      m = { ...m, content: `${interruptedNote} ${m.content}` };
-      noteNext = false;
-    }
+  for (const m of history) {
     const last = out[out.length - 1];
     if (last && mergeable(last, m)) {
       out[out.length - 1] = {
@@ -1309,19 +1298,14 @@ export class Assistant {
       this.fitHistory(); // …and the whole history has to fit the window
       const messages: ChatMessage[] = [
         { role: "system", content: this.systemPrompt },
-        // two kept questions in a row are one turn *here* only
-        ...forModel(this.history, t(this.cfg.locale, "hist.interruptedNote")),
+        ...forModel(this.history), // two kept questions in a row are one turn *here* only
       ];
       // in pi mode pi brings its own tools (bash, read, edit…)
       const tools = this.cfg.llmEnableTools && !this.cfg.llmViaPi ? this.tools.schemas() : null;
       this.sentences = sentences;
       const splitter = new SentenceSplitter();
-      // never speak nor show the "[interrupted by the user]" marker
-      let markerSeen = false;
       const speak = (s: string): void => {
-        const c = stripInterruptMarkers(s);
-        if (c !== s) markerSeen = true;
-        if (hasWords(c)) sentences.push(c);
+        sentences.push(s);
       };
       // a tool call written as *text* (no tools on offer) must never be spoken nor kept
       const markup = new ToolMarkupFilter();
@@ -1481,8 +1465,7 @@ export class Assistant {
         this.log(`⚠ tool-call markup in the model's text — dropped ${markup.droppedChars} chars`);
       }
       for (const s of splitter.flush()) speak(s);
-      if (markerSeen) this.log("⚠ model wrote an interruption marker — stripped before TTS");
-      let text = stripInterruptMarkers(SentenceSplitter.clean(resp.fullText));
+      let text = SentenceSplitter.clean(resp.fullText);
       if (!text) {
         // Even the tool-less round came back empty. Silence is not an answer: speak a
         // line of our own, and keep the history off an empty assistant message (strict

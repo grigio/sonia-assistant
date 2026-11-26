@@ -6,7 +6,6 @@ import { describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { hasInterruptMarker, stripInterruptMarkers } from "../../src/harness/text";
 import { loadLocation, saveLocation, type UserLocation } from "../../src/settings";
 import { GATE_EXEMPT_TOOLS, SCHEMAS, Tools } from "../../src/tools";
 import {
@@ -250,19 +249,5 @@ describe("searchIntent / forcedTool", () => {
     expect(forcedTool("search the web for weather records in Madrid")?.name).toBe("web_search");
     expect(forcedTool("what's the weather like?")).toEqual({ name: "get_weather", args: {} });
     expect(forcedTool("hello")).toBeNull();
-  });
-});
-
-describe("interruption marker", () => {
-  test("stripped in both locales, with the leading ellipsis", () => {
-    expect(
-      stripInterruptMarkers("I'll check the weather in Lisbon. … [interrupted by the user]"),
-    ).toBe("I'll check the weather in Lisbon.");
-    expect(stripInterruptMarkers("Ecco. … [interrotto dall'utente]")).toBe("Ecco.");
-    expect(stripInterruptMarkers("[interrupted by the user before speaking]")).toBe("");
-    expect(stripInterruptMarkers("A normal [bracketed] sentence.")).toBe(
-      "A normal [bracketed] sentence.",
-    );
-    expect(hasInterruptMarker("fine")).toBe(false);
   });
 });

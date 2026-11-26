@@ -154,11 +154,4 @@ describe("forced tool call", () => {
     expect(urls).toHaveLength(0);
     expect(spoken.join(" ")).toContain("Once upon a time");
   });
-
-  test("an interruption marker the model writes is never spoken", async () => {
-    const { a, spoken } = scripted([{ text: "Sure, here you go. [interrupted by the user]" }]);
-    await turn(a, "tell me a story");
-    expect(spoken.join(" ")).toContain("here you go");
-    expect(spoken.join(" ")).not.toContain("interrupted");
-  });
 });

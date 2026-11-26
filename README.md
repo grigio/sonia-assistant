@@ -222,20 +222,20 @@ skills never reach the prompt and `read_skill` refuses them.
 
 ### Web tools (optional)
 
-Two read-only lookups, off the "fully local" path on purpose and individually switchable:
+Optional live tools, off the "fully local" path on purpose and individually switchable:
 
 - `web_search` — set `SEARXNG_URL` to a [SearXNG](https://github.com/searxng/searxng)
   instance that serves `format=json`; empty (the default) means no such tool. The query is
   forwarded by SearXNG to public search engines.
 - `get_weather` / `set_user_location` — [Open-Meteo](https://open-meteo.com/) (no key). A
   city name or coordinates are sent to `api.open-meteo.com`, so both tools are off by
-  default; `WEATHER_TOOLS=1` enables them. The place the user names is saved in `data/settings.json` (`location`) and then
-  used for the weather, `get_datetime` and the system prompt; none is assumed before.
+  default; `WEATHER_TOOLS=1` enables them. The place the user names is saved in
+  `data/settings.json` (`location`) and then used for the weather, `get_datetime` and the
+  system prompt; none is assumed before.
 
 The prompt also carries a rule against claiming to "check" or "search" without calling a
 tool, and a plain weather question or explicit search request whose first round called no
-tool gets the call made for it (the model's unspoken text is dropped). The
-`[interrupted by the user]` history marker is kept out of the model's view and never spoken.
+tool gets the call made for it (the model's unspoken text is dropped).
 
 ---
 
